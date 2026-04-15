@@ -1,0 +1,12 @@
+{
+  "languages": {
+    "Lua": {
+      "formatter": {
+        "external": {
+          "command": "stylua",
+          "arguments": ["-"],
+        },
+      },
+    },
+  },
+}

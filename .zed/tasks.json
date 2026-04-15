@@ -1,0 +1,8 @@
+[
+  {
+    "label": "Build bundler",
+    "command": "lua",
+    "args": ["bootstrap.lua"],
+    "allow_concurrent_runs": true,
+  },
+]

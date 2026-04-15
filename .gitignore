@@ -1,0 +1,14 @@
+# Misc
+.todo
+examples/
+tests/
+
+# Profiling
+__pycache__
+profile*
+
+# Time trace
+trace.json
+
+# Code coverage
+coverage.out
