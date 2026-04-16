@@ -14,6 +14,7 @@ local Discover = {}
 ---@return table warnings
 function Discover.run(entry, src, opts)
 	opts = opts or {}
+
 	local hint_shown = false
 	local debug_mode = opts.debug or false
 
@@ -43,13 +44,11 @@ function Discover.run(entry, src, opts)
 	end
 
 	local function visit(name, follow_requires)
-		if follow_requires == nil then
-			follow_requires = true
-		end
 		if visited[name] then
-			log("skip (already visited):" .. name)
+			log("skip (already visited): " .. name)
 			return
 		end
+
 		visited[name] = true
 		log("processing: " .. name)
 
@@ -58,33 +57,39 @@ function Discover.run(entry, src, opts)
 			error("module not found: '" .. name .. "'  (searched in " .. src .. ")", 0)
 		end
 
-		local src = Resolver.read(path)
-		local tokens = Lexer.tokenize(src)
+		local file_src = Resolver.read(path)
+		local tokens = Lexer.tokenize(file_src)
 
 		-- Build line map; append "\n" so the final line (if unterminated) is captured.
 		local src_lines = {}
-		for ln in (src .. "\n"):gmatch("([^\n]*)\n") do
+		for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
 			src_lines[#src_lines + 1] = ln
 		end
 
 		if follow_requires then
 			local reqs = Lexer.find_requires(tokens)
+
 			for _, req in ipairs(reqs) do
 				if req.kind == "static" then
-					if resolve_local(req.value) then
+					local resolved_path = resolve_local(req.value)
+					if resolved_path then
 						visit(req.value, true)
 					else
 						log("external (skipping): " .. req.value)
 					end
 				else
 					local warning_key = path .. ":" .. tostring(req.line)
+
 					if not warned_lines[warning_key] then
 						warned_lines[warning_key] = true
+
 						if not hint_shown then
 							log("dynamic require(s) found; use 'extra' or 'aliases' in config")
 							hint_shown = true
 						end
+
 						local snippet = (src_lines[req.line] or "?"):match("^%s*(.-)%s*$")
+
 						local hints = ""
 						if req.hint then
 							hints = hints .. '  lead:"' .. req.hint .. '"'
@@ -92,6 +97,7 @@ function Discover.run(entry, src, opts)
 						if req.hint_trail then
 							hints = hints .. '  trail:"' .. req.hint_trail .. '"'
 						end
+
 						note_warn("dynamic require at " .. path .. ":" .. req.line .. hints .. " -> " .. snippet)
 					end
 				end
@@ -101,16 +107,19 @@ function Discover.run(entry, src, opts)
 		files[#files + 1] = {
 			name = name,
 			path = path,
-			src = src,
+			src = file_src,
 		}
+
 		log("added: " .. name)
 	end
 
 	visit(entry, true)
 
 	for _, name in ipairs(opts.extra_names or {}) do
-		if not resolve_local(name) then
-			print("WARN: extra_file '" .. name .. "' not found in " .. src)
+		local path = resolve_local(name)
+
+		if not path then
+			note_warn("extra_file '" .. name .. "' not found in " .. src)
 		else
 			visit(name, not opts.skip_extra_files_requires)
 		end

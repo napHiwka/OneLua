@@ -38,7 +38,6 @@ return {
 	-- Modules to force-include, even if not detected during auto-discovery.
 	-- Useful for modules loaded via dynamic require() that static analysis
 	-- cannot resolve.
-
 	extra = {
 		"plugins.json_backend",
 		"plugins.xml_backend",
@@ -49,7 +48,6 @@ return {
 
 	-- Require aliases: when bundled code calls require(from), it resolves to require(to).
 	-- Useful for environment-specific substitutions or shortening long module paths.
-
 	aliases = {
 		["json"] = "vendor.json",
 		["config"] = "app.config.production",
@@ -63,10 +61,18 @@ return {
 	-- false | "all" | "non_ann" ("non_ann" = non-annotation comments)
 	strip = false,
 
+	-- Try to resolve a simple dynamic require; example utils = require(SOME .. "utils")
+	-->utils = require("utils"). If an extra file `utils` is included, it will recognize
+	-- it immediately, and there will be no need to edit the source code manually.
+	resolve = false,
+
+	-- Will collapse all line breaks in the source code to make it more compact.
+	compact = false,
+
 	-- Print each discovered module and dependency edge during bundling.
 	debug = false,
 
 	-- After writing, require() the bundle to verify it loads without errors.
 	-- Also prints the keys of the returned module table.
-	verify = true,
+	verify = false,
 }

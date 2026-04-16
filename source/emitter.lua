@@ -35,13 +35,25 @@ local function serialize_aliases(aliases)
 end
 
 local function prepare_source(src, cfg)
+	-- rewrite allowed dynamic require
+	local resolve = cfg.resolve
+	if resolve then
+		local tokens = Lexer.tokenize(src)
+		local reqs = Lexer.find_requires(tokens)
+		local count
+		src, count = Lexer.rewrite_requires(src, reqs)
+		if count > 0 and cfg.debug then
+			print(string.format("[emitter] rewrote %d dynamic require(s)", count))
+		end
+	end
+
 	local mode = cfg.strip
 	if not mode or mode == false then
 		return src
 	elseif mode == "all" then
-		return Lexer.strip(src, { keep_annotations = false, keep_module = true })
+		return Lexer.strip(src, { keep_annotations = false, keep_module = true, compact = cfg.compact })
 	elseif mode == "non_ann" then
-		return Lexer.strip(src, { keep_annotations = true, keep_module = true })
+		return Lexer.strip(src, { keep_annotations = true, keep_module = true, compact = cfg.compact })
 	else
 		error("unknown strip value: " .. tostring(mode), 2)
 	end

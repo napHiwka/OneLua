@@ -20,9 +20,11 @@ local HELP = table.concat({
 	"  --strip   <mode>     Strip comments from output",
 	"                        all      remove all comments (keeps ---@module for LSP)",
 	"                        non_ann  remove non-annotation comments (keeps ---@...)",
-	"  --debug             Verbose dependency-discovery logging",
-	"  --verify            Load the bundle after writing to confirm it runs",
-	"  --help              Show this help",
+	"  --compact            Enable compact output",
+	"  --resolve            Resolve possible dynamic dependencies",
+	"  --debug              Verbose dependency-discovery logging",
+	"  --verify             Load the bundle after writing to confirm it runs",
+	"  --help               Show this help",
 	"",
 	"Config file (bundler.config.lua) is detected automatically when present in",
 	"working directory. CLI flags override config-file values when both are present.",
@@ -30,21 +32,26 @@ local HELP = table.concat({
 	"Examples:",
 	"  lua bundler.lua --entry main --src src/ --out dist/app.lua",
 	"  lua bundler.lua --config my_project.config.lua --debug --verify",
-	"  lua bundler.lua --entry app --out bundle.lua --strip non_ann",
 	"  lua bundler.lua --config release.config.lua --strip all --out dist/lib.lua",
 }, "\n")
 
 local function parse_args(args)
 	local flags = {}
 	local i = 1
+
 	while i <= #args do
 		local a = args[i]
+
 		if a == "--help" or a == "-h" then
 			flags.help = true
 		elseif a == "--debug" then
 			flags.debug = true
 		elseif a == "--verify" then
 			flags.verify = true
+		elseif a == "--resolve" then
+			flags.resolve = true
+		elseif a == "--compact" then
+			flags.compact = true
 		elseif a == "--entry" then
 			i = i + 1
 			flags.entry = args[i]
@@ -62,17 +69,18 @@ local function parse_args(args)
 			local mode = args[i]
 			if mode ~= "all" and mode ~= "non_ann" then
 				return nil, "--strip must be 'all' or 'non_ann'"
-			else
-				flags.strip = mode
 			end
+			flags.strip = mode
 		elseif a == "--config" then
 			i = i + 1
 			flags.config_path = args[i]
 		else
 			return nil, "unknown option: " .. tostring(a)
 		end
+
 		i = i + 1
 	end
+
 	return flags
 end
 
@@ -89,12 +97,18 @@ local function merge(base, overrides)
 	return result
 end
 
+local function file_exists(path)
+	local f = io.open(path, "r")
+	if f then
+		f:close()
+		return true
+	end
+	return false
+end
+
 local function load_config(path)
 	local chunk, err = loadfile(path)
 	if not chunk then
-		if err and err:match("cannot open") then
-			return nil
-		end
 		error("config error in '" .. path .. "':\n  " .. (err or "unknown"), 0)
 	end
 	local cfg = chunk()
@@ -106,20 +120,20 @@ end
 
 local function detect_config_path(preferred)
 	if preferred then
+		if not file_exists(preferred) then
+			error("config file not found: " .. preferred, 0)
+		end
 		return preferred
 	end
 
 	local candidates = { DEFAULT_CONFIG, FALLBACK_CONFIG }
 	for _, path in ipairs(candidates) do
-		local cfg = load_config(path)
-		if cfg then
-			return path, cfg
+		if file_exists(path) then
+			return path
 		end
 	end
 end
 
----Parse `args` and return a validated config table.
----Returns nil when the caller should exit (help shown, or fatal error).
 ---@param args string[]
 ---@return table|nil
 function CLI.parse(args)
@@ -133,17 +147,11 @@ function CLI.parse(args)
 		return nil
 	end
 
-	local config_path, detected_cfg = detect_config_path(flags.config_path)
+	local config_path = detect_config_path(flags.config_path)
 
-	local file_cfg = detected_cfg or {}
-	if config_path and not detected_cfg then
-		local ok, result = pcall(load_config, config_path)
-		if not ok then
-			error("[bundler] " .. tostring(result), 0)
-		end
-		file_cfg = result or {}
-	end
+	local file_cfg = {}
 	if config_path then
+		file_cfg = load_config(config_path)
 		print("[bundler] using config: " .. config_path)
 	end
 
@@ -153,13 +161,19 @@ function CLI.parse(args)
 		out = flags.out,
 		name = flags.name,
 		strip = flags.strip,
-		debug = flags.debug or nil,
-		verify = flags.verify or nil,
+		compact = flags.compact,
+		debug = flags.debug,
+		verify = flags.verify,
+		resolve = flags.resolve,
 	})
 
 	-- Apply defaults
 	cfg.src = cfg.src or "./"
 	cfg.out = cfg.out or "./bundle.lua"
+	cfg.compact = cfg.compact or false
+	cfg.debug = cfg.debug or false
+	cfg.verify = cfg.verify or false
+	cfg.resolve = cfg.resolve or false
 
 	if #args == 0 and not config_path then
 		print(HELP)

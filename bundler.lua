@@ -23,6 +23,7 @@ Bundler.Cli = Cli
 local function verify_bundle(out)
 	local dir = out:match("^(.*[/\\])") or "./"
 	local name = out:match("([^/\\]+)%.lua$")
+
 	if not name then
 		print("[bundler] verify: skipped (cannot extract module name)")
 		return
@@ -46,9 +47,11 @@ local function verify_bundle(out)
 
 	if not ok then
 		print("[bundler] verify failed: " .. tostring(result))
+		return
 	end
 
 	print("[bundler] verify OK: " .. tostring(result))
+
 	if type(result) == "table" then
 		local keys = {}
 		for k in pairs(result) do
@@ -70,8 +73,10 @@ end
 ---  6. skip_extra_files_requires | boolean | include `extra` modules as-is without scanning their local require() calls
 ---  7. aliases | table { [from] = to } | require aliases
 ---  8. strip | string|boolean | false | "all" | "non_ann"
----  9. debug | boolean | verbose discovery output
----  10. verify | boolean | load bundle after writing
+---  9. compact | boolean | compact output
+---  10. resolve | boolean | resolve possible dynamic dependencies
+---  11. debug | boolean | verbose discovery output
+---  12. verify | boolean | load bundle after writing
 ---@param cfg table
 ---@return boolean
 function Bundler.bundle(cfg)
@@ -80,17 +85,18 @@ function Bundler.bundle(cfg)
 	cfg.src = cfg.src or "./"
 	cfg.out = cfg.out or "./bundle.lua"
 	cfg.entry = Resolver.normalize_module_name(cfg.entry, cfg.src)
+
 	print(string.format("[bundler] entry: `%s`  src: `%s`  out: `%s`", cfg.entry, cfg.src, cfg.out))
 
 	local files, warnings = Discover.run(cfg.entry, cfg.src, {
 		debug = cfg.debug,
 		extra_names = cfg.extra,
-		skip_extra_names_requires = cfg.skip_extra_requires,
+		skip_extra_files_requires = cfg.skip_extra_files_requires,
 	})
 
 	print(string.format("[bundler] found %d module(s):", #files))
 	for _, f in ipairs(files) do
-		print(string.format(" [+] %-18s -> %s", f.name, f.path))
+		print(string.format(" [+] %s -> %s", f.name, f.path))
 	end
 
 	if #warnings > 0 then

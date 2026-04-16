@@ -1,11 +1,12 @@
 # OneLua
 
-`OneLua` bundles a Lua project into a single distributable `.lua` file.
+OneLua bundles a Lua project into a single distributable `.lua` file.
 
 ## Features
 
 - Follows local static `require()` dependencies automatically
-  - For dynamic require() calls, use extra and aliases
+  - For dynamic require() calls, use `extra` and `aliases` in config
+- Optionally, can resolve dynamic `require()` statements from `utils = require(VAR .. "utils")` -> `utils = require("utils")`. If you include an extra file `utils` -> working code without manual editing.
 - Hoists annotations to the top of the bundle for better language server support
 - Optionally verifies the generated bundle by loading it after writing
 - Produces compact code (not minified)

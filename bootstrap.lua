@@ -23,6 +23,8 @@ Bundler.bundle({
 	name = "bundler",
 	strip = "all",
 	debug = true,
+	resolve = true,
+	compact = true,
 	verify = true,
 })
 

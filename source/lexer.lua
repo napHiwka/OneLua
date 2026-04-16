@@ -385,28 +385,47 @@ function Lexer.find_requires(tokens)
 					-- last_str  – last string literal in the argument
 					local first_str = nil
 					local last_str = nil
+					local arg_seq = {}
 
 					while j <= n do
 						local t = tokens[j]
 						if t.type == T.LPAREN then
 							depth = depth + 1
+							arg_seq[#arg_seq + 1] = t
 						elseif t.type == T.RPAREN then
 							depth = depth - 1
 							if depth == 0 then
 								break
 							end
-						elseif t.type == T.STRING then
-							first_str = first_str or t.value
-							last_str = t.value
+							arg_seq[#arg_seq + 1] = t
+						else
+							arg_seq[#arg_seq + 1] = t
+							if t.type == T.STRING then
+								first_str = first_str or t.value
+								last_str = t.value
+							end
 						end
 						j = j + 1
+					end
+
+					-- determine whether it is possible to replace require(X .. "str") -> require("str")
+					local rewrite_as = nil
+					if #arg_seq == 3 then
+						local a, b, c = arg_seq[1], arg_seq[2], arg_seq[3]
+						if b.type == T.CONCAT then
+							if a.type == T.IDENT and c.type == T.STRING then
+								rewrite_as = c.value -- require(IDENT .. "str")
+							elseif a.type == T.STRING and c.type == T.IDENT then
+								rewrite_as = a.value -- require("str" .. IDENT)
+							end
+						end
 					end
 
 					results[#results + 1] = {
 						kind = "dynamic",
 						hint = first_str,
-						-- Only record hint_trail when it differs from hint.
 						hint_trail = (last_str ~= first_str) and last_str or nil,
+						rewrite_as = rewrite_as,
 						line = req_line,
 					}
 					i = j + 1
@@ -458,7 +477,7 @@ function Lexer.strip(src, opts)
 	opts = opts or {}
 	local keep_ann = opts.keep_annotations or false
 	local keep_module = opts.keep_module or false
-	local compact = opts.compact ~= false -- TODO: wire through config
+	local compact = opts.compact or false
 
 	local out = {}
 	local i, n = 1, #src
@@ -570,4 +589,47 @@ function Lexer.strip(src, opts)
 	return compact and compact_lines(result) or result
 end
 
+-- Rewrites the dynamic require(IDENTIFIER.."str") -> require("str")
+-- Returns (new_src, count)
+function Lexer.rewrite_requires(src, reqs)
+	local line_map = {}
+	for _, r in ipairs(reqs) do
+		if r.rewrite_as then
+			line_map[r.line] = r.rewrite_as
+		end
+	end
+
+	if not next(line_map) then
+		return src, 0
+	end
+
+	local total = 0
+	local out = {}
+	local ln = 0
+
+	for line in (src .. "\n"):gmatch("([^\n]*)\n") do
+		ln = ln + 1
+		local target = line_map[ln]
+		if target then
+			-- escaping special characters
+			local esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
+			local repl = 'require("' .. target .. '")'
+			local n1, n2
+
+			-- require( IDENT .. "target" )
+			line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. esc .. "[\"']%s*%)", repl)
+			-- require( "target" .. IDENT )
+			line, n2 = line:gsub("require%s*%(%s*[\"']" .. esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
+			total = total + n1 + n2
+		end
+		out[#out + 1] = line
+	end
+
+	-- remove the extra empty line at the end from the additional "\n"
+	if out[#out] == "" then
+		out[#out] = nil
+	end
+
+	return table.concat(out, "\n"), total
+end
 return Lexer
