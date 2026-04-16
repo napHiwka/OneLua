@@ -50,13 +50,15 @@ local function prepare_source(src, cfg)
 	local mode = cfg.strip
 	if not mode or mode == false then
 		return src
-	elseif mode == "all" then
-		return Lexer.strip(src, { keep_annotations = false, keep_module = true, compact = cfg.compact })
-	elseif mode == "non_ann" then
-		return Lexer.strip(src, { keep_annotations = true, keep_module = true, compact = cfg.compact })
-	else
+	end
+	if mode ~= "all" and mode ~= "non_ann" then
 		error("unknown strip value: " .. tostring(mode), 2)
 	end
+	return Lexer.strip(src, {
+		keep_annotations = (mode == "non_ann"),
+		keep_module = true,
+		compact = cfg.compact,
+	})
 end
 
 local RUNTIME = [[
