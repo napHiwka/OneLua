@@ -62,22 +62,20 @@ local function verify_bundle(out)
 	end
 end
 
--- Duplicated for LSP support
-
---- Bundle a Lua project. Config fields:
----  1. entry | string (required) | module name to use as entry
----  2. src | string | base directory (default: "./")
----  3. out | string | output file   (default: "./bundle.lua")
----  4. name | string | exported name (default: entry basename)
----  5. extra | string[] | additional modules to force-include
----  6. skip_extra_files_requires | boolean | include `extra` modules as-is without scanning their local require() calls
----  7. aliases | table { [from] = to } | require aliases
----  8. strip | string|boolean | false | "all" | "non_ann"
----  9. compact | boolean | compact output
----  10. resolve | boolean | resolve possible dynamic dependencies
----  11. debug | boolean | verbose discovery output
----  12. verify | boolean | load bundle after writing
----@param cfg table
+---@class BundlerConfig
+---@field entry string Module name to use as the entry point (required).
+---@field src string? Base source directory. Default: `"./"`
+---@field out string? Output file path. Default: `"./bundle.lua"`
+---@field name string? Exported local name in the bundle. Defaults to the entry basename.
+---@field extra string[]? Additional module names to force-include regardless of discovery.
+---@field skip_extra_files_requires boolean? When `true`, `extra` modules are included without scanning their own `require()` calls.
+---@field aliases table<string,string>? Require aliases applied at runtime: `{ [from] = to }`.
+---@field strip "all"|"non_ann"|false? Strip mode. `"all"` removes all comments; `"non_ann"` keeps `---@` annotation lines.
+---@field compact boolean? Collapse consecutive blank lines in stripped output.
+---@field resolve boolean? Rewrite statically-detectable dynamic `require()` calls before bundling.
+---@field debug boolean? Print verbose discovery and rewrite output.
+---@field verify boolean? Load the bundle after writing to verify it executes cleanly.
+---@param cfg BundlerConfig
 ---@return boolean
 function Bundler.bundle(cfg)
 	assert(type(cfg.entry) == "string" and cfg.entry ~= "", "cfg.entry must be a non-empty string")
