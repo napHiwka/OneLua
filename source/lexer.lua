@@ -27,10 +27,10 @@ end
 -- (i.e. the start of the optional `=` run).
 --
 -- Returns 4 values on success:
---   content_start – first index of the bracket body
---   content_end   – last  index of the bracket body
---   next_pos      – first index after the closing bracket
---   closed        – false when no matching closer was found before EOF
+--   content_start - first index of the bracket body
+--   content_end   - last  index of the bracket body
+--   next_pos      - first index after the closing bracket
+--   closed        - false when no matching closer was found before EOF
 --
 -- Returns nil when the sequence at `pos` is not a valid long-bracket opener
 -- (e.g. a bare `[` that is not followed by `=*[`).
@@ -59,19 +59,24 @@ end
 
 -- Walks past a short-quoted string, starting at the character AFTER the
 -- opening quote.  Returns three values:
---   parts  - table of raw content pieces (backslash escapes preserved verbatim)
---   new_i  – position after the closing quote, or after the last consumed
+--   parts  - table of raw content pieces
+--   new_i  - position after the closing quote, or after the last consumed
 --             character if the string was unterminated
---   closed – true iff a matching closing quote was found
+--   closed - true iff a matching closing quote was found
 --
--- Escape sequences are kept intact (backslash + the following character), so
--- neither the tokeniser nor the stripper needs to interpret Lua's escape rules.
--- Lua 5.2+ sequences like \z, \xNN, \u{NNNN} pass through correctly because
--- we always consume exactly one character after the backslash.
+-- Escape handling notes:
+--   \z  (Lua 5.2+): the backslash-z pair and the following whitespace run
+--       (including newlines) are consumed and dropped.  Module-name strings
+--       never contain \z, so dropping is acceptable; it also prevents a bare
+--       newline after \z from being misread as an unterminated-string signal.
+--   \xNN, \u{NNNN}: the backslash and the NEXT SINGLE character are stored
+--       verbatim (e.g. "\x" or "\u").  The remaining digits / braces appear
+--       as subsequent parts.  This is incorrect for general string values but
+--       harmless for require-path analysis, since paths never use these forms.
+--   All other sequences: backslash + one following character, kept verbatim.
 --
--- On encountering a bare newline (illegal inside a short string) the walk stops
--- WITHOUT consuming it, leaving it for the outer loop to handle so that line
--- counters stay accurate.
+-- A bare newline (illegal inside a short string) stops the walk WITHOUT
+-- consuming it so the outer loop's line counter stays accurate.
 local function scan_short_string(src, i, n, quote)
 	local parts = {}
 	while i <= n do
@@ -79,8 +84,21 @@ local function scan_short_string(src, i, n, quote)
 		if c == "\\" then
 			-- Consume the backslash and the very next character as a single unit.
 			local esc = (i + 1 <= n) and src:sub(i + 1, i + 1) or ""
-			parts[#parts + 1] = "\\" .. esc
-			i = i + 2
+			if esc == "z" then
+				-- \z: skip the escape pair then the following whitespace run.
+				i = i + 2
+				while i <= n do
+					local w = src:sub(i, i)
+					if w == " " or w == "\t" or w == "\r" or w == "\n" then
+						i = i + 1
+					else
+						break
+					end
+				end
+			else
+				parts[#parts + 1] = "\\" .. esc
+				i = i + 2
+			end
 		elseif c == quote then
 			return parts, i + 1, true -- closing quote consumed; string is done
 		elseif c == "\n" or c == "\r" then
@@ -216,16 +234,31 @@ function Lexer.tokenize(src)
 		-- Numeric literals
 		elseif c:match("^%d$") then
 			if c == "0" and (ch(1) == "x" or ch(1) == "X") then
-				-- Hexadecimal literal (0x… / 0X…).
-				-- NOTE: we do not verify that at least one hex digit follows the
-				-- prefix; an invalid input like `0x,` is silently accepted.
-				-- We assume the source is valid Lua.
-				skip(2) -- consume "0x" / "0X"
+				-- Hexadecimal integer or float (0x1A, 0x1.8p+1).
+				skip(2)
 				while i <= n and ch():match("^%x$") do
 					skip()
 				end
+				-- Optional fractional part (hex floats).
+				if ch() == "." then
+					skip()
+					while i <= n and ch():match("^%x$") do
+						skip()
+					end
+				end
+				-- Optional binary exponent (hex floats require this for validity,
+				-- but we accept it whether or not digits preceded it).
+				if ch():match("^[pP]$") then
+					skip()
+					if ch():match("^[%+%-]$") then
+						skip()
+					end
+					while i <= n and ch():match("^%d$") do
+						skip()
+					end
+				end
 			else
-				-- Decimal: integer part.
+				-- Decimal integer part.
 				while i <= n and ch():match("^%d$") do
 					skip()
 				end
@@ -302,9 +335,7 @@ function Lexer.find_requires(tokens)
 		then
 			-- Exclude `local x = require(...)` where require is being called
 			-- and x receives the module, not the function.
-			-- tokens[j+4] may be nil (past end of stream); Lua's `and`
-			-- short-circuits so the nil index is safe without an explicit
-			-- bounds check.
+			-- tokens[j+4] may be nil; the `and` short-circuit keeps this safe.
 			local te = tokens[j + 4]
 			if not (te and te.type == T.LPAREN) then
 				req_idents[tb.value] = true
@@ -317,18 +348,21 @@ function Lexer.find_requires(tokens)
 	-- concatenation starting at token index j into a single string.
 	--
 	-- Handles:
-	--   "a"          -> "a"
-	--   "a" .. "b"   -> "ab"
+	--   "a" -> "a"
+	--   "a" .. "b" -> "ab"
 	--   ("a" .. "b") -> "ab"
+	--   (("a" .. "b")) -> "ab"  (arbitrary nesting depth)
 	--
 	-- Returns (value, next_j) on success, or (nil, start_j) when the
 	-- expression is not fully static (contains variables, function calls, …).
 	---------------------------------------------------------------------------
 	local function fold_strings(j)
 		local start = j
-		local inner = tokens[j] and tokens[j].type == T.LPAREN
 
-		if inner then
+		-- Strip any number of leading parentheses.
+		local depth = 0
+		while tokens[j] and tokens[j].type == T.LPAREN do
+			depth = depth + 1
 			j = j + 1
 		end
 
@@ -345,7 +379,8 @@ function Lexer.find_requires(tokens)
 			j = j + 2
 		end
 
-		if inner then
+		-- Close the matching parentheses we opened.
+		for _ = 1, depth do
 			if not (tokens[j] and tokens[j].type == T.RPAREN) then
 				return nil, start -- mismatched parentheses in expression
 			end
@@ -377,24 +412,23 @@ function Lexer.find_requires(tokens)
 					results[#results + 1] = { kind = "static", value = value, line = req_line }
 					i = next_j + 1
 				else
-					-- Dynamic argument: scan forward to the matching ")" and
-					-- collect any string literals found as diagnostic hints.
+					-- Dynamic argument: scan to the matching ")" and collect
+					-- string literals as diagnostic hints.
 					local j = arg_start
-					local depth = 1
-					-- first_str – first string literal in the argument
-					-- last_str  – last string literal in the argument
-					local first_str = nil
-					local last_str = nil
+					local rdepth = 1
+					-- first_str - first string literal in the argument
+					-- last_str  - last string literal in the argument
+					local first_str, last_str = nil, nil
 					local arg_seq = {}
 
 					while j <= n do
 						local t = tokens[j]
 						if t.type == T.LPAREN then
-							depth = depth + 1
+							rdepth = rdepth + 1
 							arg_seq[#arg_seq + 1] = t
 						elseif t.type == T.RPAREN then
-							depth = depth - 1
-							if depth == 0 then
+							rdepth = rdepth - 1
+							if rdepth == 0 then
 								break
 							end
 							arg_seq[#arg_seq + 1] = t
@@ -408,7 +442,8 @@ function Lexer.find_requires(tokens)
 						j = j + 1
 					end
 
-					-- determine whether it is possible to replace require(X .. "str") -> require("str")
+					-- Detect require(IDENT .. "str") / require("str" .. IDENT) for
+					-- possible rewriting.
 					local rewrite_as = nil
 					if #arg_seq == 3 then
 						local a, b, c = arg_seq[1], arg_seq[2], arg_seq[3]
@@ -586,10 +621,15 @@ function Lexer.strip(src, opts)
 	end
 
 	local result = table.concat(out)
-	return compact and compact_lines(result) or result
+	if compact then
+		return compact_lines(result)
+	end
+	-- Collapse runs of 3+ newlines (2+ blank lines) down to 2 (1 blank line).
+	return (result:gsub("\n\n\n+", "\n\n"))
 end
 
--- Rewrites the dynamic require(IDENTIFIER.."str") -> require("str")
+-- Rewrites dynamic require(IDENTIFIER .. "str") -> require("str")
+-- and        require("str" .. IDENTIFIER) -> require("str")
 -- Returns (new_src, count)
 function Lexer.rewrite_requires(src, reqs)
 	local line_map = {}
@@ -611,15 +651,17 @@ function Lexer.rewrite_requires(src, reqs)
 		ln = ln + 1
 		local target = line_map[ln]
 		if target then
-			-- escaping special characters
-			local esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
-			local repl = 'require("' .. target .. '")'
-			local n1, n2
+			-- Escape target for use in a Lua pattern, then again for the
+			-- replacement string (% in replacements has special meaning).
+			local pat_esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
+			local repl_raw = 'require("' .. target .. '")'
+			local repl = repl_raw:gsub("%%", "%%%%")
 
+			local n1, n2
 			-- require( IDENT .. "target" )
-			line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. esc .. "[\"']%s*%)", repl)
+			line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
 			-- require( "target" .. IDENT )
-			line, n2 = line:gsub("require%s*%(%s*[\"']" .. esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
+			line, n2 = line:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
 			total = total + n1 + n2
 		end
 		out[#out + 1] = line
