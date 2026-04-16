@@ -1,4 +1,25 @@
---[[ LuaOne | entry: bundler | modules: 7 | 2026-04-16T09:38:24Z ]]
+--[[ LuaOne | entry: bundler | modules: 7 | 2026-04-16T22:37:14Z ]]
+
+--------------------------------------------------------------------------
+-- TYPE ANNOTATIONS
+--------------------------------------------------------------------------
+-- Extracted from source modules.
+-- Hoisted to top level so lua-language-server can index them.
+-- Regenerate by re-running the bundler.
+--
+---@class BundlerConfig
+---@field entry string Module name to use as the entry point (required).
+---@field src string? Base source directory. Default: `"./"`
+---@field out string? Output file path. Default: `"./bundle.lua"`
+---@field name string? Exported local name in the bundle. Defaults to the entry basename.
+---@field extra string[]? Additional module names to force-include regardless of discovery.
+---@field skip_extra_files_requires boolean? When `true`, `extra` modules are included without scanning their own `require()` calls.
+---@field aliases table<string,string>? Require aliases applied at runtime: `{ [from] = to }`.
+---@field strip "all"|"non_ann"|false? Strip mode. `"all"` removes all comments; `"non_ann"` keeps `---@` annotation lines.
+---@field compact boolean? Collapse consecutive blank lines in stripped output.
+---@field resolve boolean? Rewrite statically-detectable dynamic `require()` calls before bundling.
+---@field debug boolean? Print verbose discovery and rewrite output.
+---@field verify boolean? Load the bundle after writing to verify it executes cleanly.
 
 --------------------------------------------------------------------------
 -- RUNTIME
@@ -71,8 +92,20 @@ __loaders__["source.lexer"] = function(...)
 			local c = src:sub(i, i)
 			if c == "\\" then
 				local esc = (i + 1 <= n) and src:sub(i + 1, i + 1) or ""
-				parts[#parts + 1] = "\\" .. esc
-				i = i + 2
+				if esc == "z" then
+					i = i + 2
+					while i <= n do
+						local w = src:sub(i, i)
+						if w == " " or w == "\t" or w == "\r" or w == "\n" then
+							i = i + 1
+						else
+							break
+						end
+					end
+				else
+					parts[#parts + 1] = "\\" .. esc
+					i = i + 2
+				end
 			elseif c == quote then
 				return parts, i + 1, true
 			elseif c == "\n" or c == "\r" then
@@ -173,6 +206,21 @@ __loaders__["source.lexer"] = function(...)
 					while i <= n and ch():match("^%x$") do
 						skip()
 					end
+					if ch() == "." then
+						skip()
+						while i <= n and ch():match("^%x$") do
+							skip()
+						end
+					end
+					if ch():match("^[pP]$") then
+						skip()
+						if ch():match("^[%+%-]$") then
+							skip()
+						end
+						while i <= n and ch():match("^%d$") do
+							skip()
+						end
+					end
 				else
 					while i <= n and ch():match("^%d$") do
 						skip()
@@ -233,8 +281,9 @@ __loaders__["source.lexer"] = function(...)
 		end
 		local function fold_strings(j)
 			local start = j
-			local inner = tokens[j] and tokens[j].type == T.LPAREN
-			if inner then
+			local depth = 0
+			while tokens[j] and tokens[j].type == T.LPAREN do
+				depth = depth + 1
 				j = j + 1
 			end
 			if not (tokens[j] and tokens[j].type == T.STRING) then
@@ -246,7 +295,7 @@ __loaders__["source.lexer"] = function(...)
 				parts[#parts + 1] = tokens[j + 1].value
 				j = j + 2
 			end
-			if inner then
+			for _ = 1, depth do
 				if not (tokens[j] and tokens[j].type == T.RPAREN) then
 					return nil, start
 				end
@@ -271,18 +320,17 @@ __loaders__["source.lexer"] = function(...)
 						i = next_j + 1
 					else
 						local j = arg_start
-						local depth = 1
-						local first_str = nil
-						local last_str = nil
+						local rdepth = 1
+						local first_str, last_str = nil, nil
 						local arg_seq = {}
 						while j <= n do
 							local t = tokens[j]
 							if t.type == T.LPAREN then
-								depth = depth + 1
+								rdepth = rdepth + 1
 								arg_seq[#arg_seq + 1] = t
 							elseif t.type == T.RPAREN then
-								depth = depth - 1
-								if depth == 0 then
+								rdepth = rdepth - 1
+								if rdepth == 0 then
 									break
 								end
 								arg_seq[#arg_seq + 1] = t
@@ -427,7 +475,10 @@ __loaders__["source.lexer"] = function(...)
 			end
 		end
 		local result = table.concat(out)
-		return compact and compact_lines(result) or result
+		if compact then
+			return compact_lines(result)
+		end
+		return (result:gsub("\n\n\n+", "\n\n"))
 	end
 	function Lexer.rewrite_requires(src, reqs)
 		local line_map = {}
@@ -446,11 +497,12 @@ __loaders__["source.lexer"] = function(...)
 			ln = ln + 1
 			local target = line_map[ln]
 			if target then
-				local esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
-				local repl = 'require("' .. target .. '")'
+				local pat_esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
+				local repl_raw = 'require("' .. target .. '")'
+				local repl = repl_raw:gsub("%%", "%%%%")
 				local n1, n2
-				line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. esc .. "[\"']%s*%)", repl)
-				line, n2 = line:gsub("require%s*%(%s*[\"']" .. esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
+				line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
+				line, n2 = line:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
 				total = total + n1 + n2
 			end
 			out[#out + 1] = line
@@ -762,13 +814,15 @@ __loaders__["source.emitter"] = function(...)
 		local mode = cfg.strip
 		if not mode or mode == false then
 			return src
-		elseif mode == "all" then
-			return Lexer.strip(src, { keep_annotations = false, keep_module = true, compact = cfg.compact })
-		elseif mode == "non_ann" then
-			return Lexer.strip(src, { keep_annotations = true, keep_module = true, compact = cfg.compact })
-		else
+		end
+		if mode ~= "all" and mode ~= "non_ann" then
 			error("unknown strip value: " .. tostring(mode), 2)
 		end
+		return Lexer.strip(src, {
+			keep_annotations = (mode == "non_ann"),
+			keep_module = true,
+			compact = cfg.compact,
+		})
 	end
 	local RUNTIME = [[
    local __modules__ = {}
