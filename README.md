@@ -51,7 +51,9 @@ return {
 		["json"] = "vendor.json",
 	},
 	strip = "non_ann",
-	debug = false,
+	resolve = false,
+	compact = true,
+	debug = true,
 	verify = true,
 }
 ```
