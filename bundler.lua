@@ -1,13 +1,13 @@
 -- OneLua: bundle a Lua project into a single distributable file.
 --
 -- Library usage:
---   local Bundler = require("bundler")
+--   local Bundler = require("onelua")
 --   Bundler.bundle({ entry="main", src="src/", out="dist/bundle.lua" })
 --
 -- CLI usage:
---   lua bundler.lua --entry main --src src/ --out dist/bundle.lua
---   lua bundler.lua --config bundler.config.lua
---   lua bundler.lua --help
+--   lua onelua.lua --entry main --src src/ --out dist/bundle.lua
+--   lua onelua.lua --config bundler.config.lua
+--   lua onelua.lua --help
 
 local SELF_DIR = ((debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./")
 package.path = SELF_DIR .. "?.lua;" .. SELF_DIR .. "?/init.lua;" .. package.path
@@ -46,8 +46,7 @@ local function verify_bundle(out)
 	package.loaded[name] = nil
 
 	if not ok then
-		print("[bundler] verify failed: " .. tostring(result))
-		return
+		error("verify failed: " .. tostring(result), 0)
 	end
 
 	print("[bundler] verify OK: " .. tostring(result))
@@ -79,12 +78,10 @@ end
 ---@return boolean
 function Bundler.bundle(cfg)
 	assert(type(cfg.entry) == "string" and cfg.entry ~= "", "cfg.entry must be a non-empty string")
-
 	cfg.src = cfg.src or "./"
 	cfg.out = cfg.out or "./bundle.lua"
 	cfg.entry = Resolver.normalize_module_name(cfg.entry, cfg.src)
-
-	print(string.format("[bundler] entry: `%s`  src: `%s`  out: `%s`", cfg.entry, cfg.src, cfg.out))
+	print(string.format("[bundler] entry:`%s` src:`%s` out:`%s`", cfg.entry, cfg.src, cfg.out))
 
 	local files, warnings = Discover.run(cfg.entry, cfg.src, {
 		debug = cfg.debug,
@@ -94,7 +91,7 @@ function Bundler.bundle(cfg)
 
 	print(string.format("[bundler] found %d module(s):", #files))
 	for _, f in ipairs(files) do
-		print(string.format(" [+] %s -> %s", f.name, f.path))
+		print(string.format(" [+] `%s` -> `%s`", f.name, f.path))
 	end
 
 	if #warnings > 0 then
@@ -120,7 +117,7 @@ function Bundler.run_cli(args)
 
 	local ok, err = pcall(Bundler.bundle, cfg)
 	if not ok then
-		error("fatal: " .. tostring(err) .. "\n", 0)
+		error("[bundler] fatal: " .. tostring(err) .. "\n")
 	end
 end
 

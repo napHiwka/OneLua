@@ -97,18 +97,12 @@ local function merge(base, overrides)
 	return result
 end
 
-local function file_exists(path)
-	local f = io.open(path, "r")
-	if f then
-		f:close()
-		return true
-	end
-	return false
-end
-
 local function load_config(path)
 	local chunk, err = loadfile(path)
 	if not chunk then
+		if err and err:match("cannot open") then
+			return nil
+		end
 		error("config error in '" .. path .. "':\n  " .. (err or "unknown"), 0)
 	end
 	local cfg = chunk()
@@ -120,16 +114,18 @@ end
 
 local function detect_config_path(preferred)
 	if preferred then
-		if not file_exists(preferred) then
+		local cfg = load_config(preferred)
+		if not cfg then
 			error("config file not found: " .. preferred, 0)
 		end
-		return preferred
+		return preferred, cfg
 	end
 
 	local candidates = { DEFAULT_CONFIG, FALLBACK_CONFIG }
 	for _, path in ipairs(candidates) do
-		if file_exists(path) then
-			return path
+		local cfg = load_config(path)
+		if cfg then
+			return path, cfg
 		end
 	end
 end
@@ -147,13 +143,12 @@ function CLI.parse(args)
 		return nil
 	end
 
-	local config_path = detect_config_path(flags.config_path)
+	local config_path, file_cfg = detect_config_path(flags.config_path)
 
-	local file_cfg = {}
 	if config_path then
-		file_cfg = load_config(config_path)
 		print("[bundler] using config: " .. config_path)
 	end
+	file_cfg = file_cfg or {}
 
 	local cfg = merge(file_cfg, {
 		entry = flags.entry,

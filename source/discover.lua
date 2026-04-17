@@ -60,14 +60,13 @@ function Discover.run(entry, src, opts)
 		local file_src = Resolver.read(path)
 		local tokens = Lexer.tokenize(file_src)
 
-		-- Build line map; append "\n" so the final line (if unterminated) is captured.
-		local src_lines = {}
-		for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
-			src_lines[#src_lines + 1] = ln
-		end
-
 		if follow_requires then
 			local reqs = Lexer.find_requires(tokens)
+			local src_lines = {}
+
+			for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
+				src_lines[#src_lines + 1] = ln
+			end
 
 			for _, req in ipairs(reqs) do
 				if req.kind == "static" then
@@ -119,7 +118,7 @@ function Discover.run(entry, src, opts)
 		local path = resolve_local(name)
 
 		if not path then
-			note_warn("extra_file '" .. name .. "' not found in " .. src)
+			note_warn("extra module '" .. name .. "' not found in " .. src)
 		else
 			visit(name, not opts.skip_extra_files_requires)
 		end

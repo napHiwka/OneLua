@@ -1,4 +1,4 @@
---[[ LuaOne | entry: bundler | modules: 7 | 2026-04-16T22:37:14Z ]]
+--[[ LuaOne | entry: bundler | modules: 7 | 2026-04-17T11:33:46Z ]]
 
 --------------------------------------------------------------------------
 -- TYPE ANNOTATIONS
@@ -54,7 +54,7 @@ end
 -- MODULES
 --------------------------------------------------------------------------
 
--- source.lexer  <-  ./source/lexer.lua
+-- source.lexer <- ./source/lexer.lua
 __loaders__["source.lexer"] = function(...)
 	local Lexer = {}
 	Lexer.T = {
@@ -515,7 +515,7 @@ __loaders__["source.lexer"] = function(...)
 	return Lexer
 end
 
--- source.resolver  <-  ./source/resolver.lua
+-- source.resolver <- ./source/resolver.lua
 __loaders__["source.resolver"] = function(...)
 	local Resolver = {}
 	local function ensure_dir(path)
@@ -604,7 +604,7 @@ __loaders__["source.resolver"] = function(...)
 	return Resolver
 end
 
--- source.discover  <-  ./source/discover.lua
+-- source.discover <- ./source/discover.lua
 __loaders__["source.discover"] = function(...)
 	local Lexer = require("source.lexer")
 	local Resolver = require("source.resolver")
@@ -646,12 +646,12 @@ __loaders__["source.discover"] = function(...)
 			end
 			local file_src = Resolver.read(path)
 			local tokens = Lexer.tokenize(file_src)
-			local src_lines = {}
-			for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
-				src_lines[#src_lines + 1] = ln
-			end
 			if follow_requires then
 				local reqs = Lexer.find_requires(tokens)
+				local src_lines = {}
+				for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
+					src_lines[#src_lines + 1] = ln
+				end
 				for _, req in ipairs(reqs) do
 					if req.kind == "static" then
 						local resolved_path = resolve_local(req.value)
@@ -692,7 +692,7 @@ __loaders__["source.discover"] = function(...)
 		for _, name in ipairs(opts.extra_names or {}) do
 			local path = resolve_local(name)
 			if not path then
-				note_warn("extra_file '" .. name .. "' not found in " .. src)
+				note_warn("extra module '" .. name .. "' not found in " .. src)
 			else
 				visit(name, not opts.skip_extra_files_requires)
 			end
@@ -702,7 +702,7 @@ __loaders__["source.discover"] = function(...)
 	return Discover
 end
 
--- source.annotations  <-  ./source/annotations.lua
+-- source.annotations <- ./source/annotations.lua
 __loaders__["source.annotations"] = function(...)
 	local Annotations = {}
 	local DEFINITION_TAGS = {
@@ -770,7 +770,7 @@ __loaders__["source.annotations"] = function(...)
 	return Annotations
 end
 
--- source.emitter  <-  ./source/emitter.lua
+-- source.emitter <- ./source/emitter.lua
 __loaders__["source.emitter"] = function(...)
 	local Annotations = require("source.annotations")
 	local Lexer = require("source.lexer")
@@ -800,7 +800,7 @@ __loaders__["source.emitter"] = function(...)
 		table.sort(parts)
 		return "{\n" .. table.concat(parts, ",\n") .. "\n}"
 	end
-	local function prepare_source(src, cfg)
+	local function prepare_source(name, src, cfg)
 		local resolve = cfg.resolve
 		if resolve then
 			local tokens = Lexer.tokenize(src)
@@ -808,7 +808,7 @@ __loaders__["source.emitter"] = function(...)
 			local count
 			src, count = Lexer.rewrite_requires(src, reqs)
 			if count > 0 and cfg.debug then
-				print(string.format("[emitter] rewrote %d dynamic require(s)", count))
+				print(string.format("[emitter] rewrote %d dynamic require(s) in `%s`", count, name))
 			end
 		end
 		local mode = cfg.strip
@@ -854,7 +854,7 @@ __loaders__["source.emitter"] = function(...)
 				name = f.name,
 				path = f.path,
 				src = f.src,
-				body = prepare_source(f.src, cfg),
+				body = prepare_source(f.name, f.src, cfg),
 			}
 		end
 		local out = {}
@@ -881,7 +881,7 @@ __loaders__["source.emitter"] = function(...)
 		out[#out + 1] = ""
 		for _, mod in ipairs(modules) do
 			local body = trim_trailing(mod.body)
-			out[#out + 1] = "-- " .. mod.name .. "  <-  " .. mod.path
+			out[#out + 1] = "-- " .. mod.name .. " <- " .. mod.path
 			out[#out + 1] = string.format("__loaders__[%q] = function(...)", mod.name)
 			out[#out + 1] = indent(body, 3)
 			out[#out + 1] = "end\n"
@@ -897,10 +897,10 @@ __loaders__["source.emitter"] = function(...)
 	return Emitter
 end
 
--- source.cli  <-  ./source/cli.lua
+-- source.cli <- ./source/cli.lua
 __loaders__["source.cli"] = function(...)
 	local DEFAULT_CONFIG = "bundler.config.lua"
-	local FALLBACK_CONFIG = "bundlerConfig.lua"
+	local FALLBACK_CONFIG = "_bundler.config.lua"
 	local CLI = {}
 	local HELP = table.concat({
 		"OneLua - bundle a Lua project into a single file",
@@ -987,17 +987,12 @@ __loaders__["source.cli"] = function(...)
 		end
 		return result
 	end
-	local function file_exists(path)
-		local f = io.open(path, "r")
-		if f then
-			f:close()
-			return true
-		end
-		return false
-	end
 	local function load_config(path)
 		local chunk, err = loadfile(path)
 		if not chunk then
+			if err and err:match("cannot open") then
+				return nil
+			end
 			error("config error in '" .. path .. "':\n  " .. (err or "unknown"), 0)
 		end
 		local cfg = chunk()
@@ -1008,15 +1003,17 @@ __loaders__["source.cli"] = function(...)
 	end
 	local function detect_config_path(preferred)
 		if preferred then
-			if not file_exists(preferred) then
+			local cfg = load_config(preferred)
+			if not cfg then
 				error("config file not found: " .. preferred, 0)
 			end
-			return preferred
+			return preferred, cfg
 		end
 		local candidates = { DEFAULT_CONFIG, FALLBACK_CONFIG }
 		for _, path in ipairs(candidates) do
-			if file_exists(path) then
-				return path
+			local cfg = load_config(path)
+			if cfg then
+				return path, cfg
 			end
 		end
 	end
@@ -1029,12 +1026,11 @@ __loaders__["source.cli"] = function(...)
 			print(HELP)
 			return nil
 		end
-		local config_path = detect_config_path(flags.config_path)
-		local file_cfg = {}
+		local config_path, file_cfg = detect_config_path(flags.config_path)
 		if config_path then
-			file_cfg = load_config(config_path)
 			print("[bundler] using config: " .. config_path)
 		end
+		file_cfg = file_cfg or {}
 		local cfg = merge(file_cfg, {
 			entry = flags.entry,
 			src = flags.src,
@@ -1061,7 +1057,7 @@ __loaders__["source.cli"] = function(...)
 	return CLI
 end
 
--- bundler  <-  ./bundler.lua
+-- bundler <- ./bundler.lua
 __loaders__["bundler"] = function(...)
 	local SELF_DIR = ((debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./")
 	package.path = SELF_DIR .. "?.lua;" .. SELF_DIR .. "?/init.lua;" .. package.path
@@ -1089,8 +1085,7 @@ __loaders__["bundler"] = function(...)
 		package.path = prev_path
 		package.loaded[name] = nil
 		if not ok then
-			print("[bundler] verify failed: " .. tostring(result))
-			return
+			error("verify failed: " .. tostring(result), 0)
 		end
 		print("[bundler] verify OK: " .. tostring(result))
 		if type(result) == "table" then
@@ -1107,7 +1102,7 @@ __loaders__["bundler"] = function(...)
 		cfg.src = cfg.src or "./"
 		cfg.out = cfg.out or "./bundle.lua"
 		cfg.entry = Resolver.normalize_module_name(cfg.entry, cfg.src)
-		print(string.format("[bundler] entry: `%s`  src: `%s`  out: `%s`", cfg.entry, cfg.src, cfg.out))
+		print(string.format("[bundler] entry:`%s` src:`%s` out:`%s`", cfg.entry, cfg.src, cfg.out))
 		local files, warnings = Discover.run(cfg.entry, cfg.src, {
 			debug = cfg.debug,
 			extra_names = cfg.extra,
@@ -1115,7 +1110,7 @@ __loaders__["bundler"] = function(...)
 		})
 		print(string.format("[bundler] found %d module(s):", #files))
 		for _, f in ipairs(files) do
-			print(string.format(" [+] %s -> %s", f.name, f.path))
+			print(string.format(" [+] `%s` -> `%s`", f.name, f.path))
 		end
 		if #warnings > 0 then
 			print(string.format("[bundler] %d dynamic require(s) detected", #warnings))
@@ -1135,7 +1130,7 @@ __loaders__["bundler"] = function(...)
 		end
 		local ok, err = pcall(Bundler.bundle, cfg)
 		if not ok then
-			error("fatal: " .. tostring(err) .. "\n", 0)
+			error("[bundler] fatal: " .. tostring(err) .. "\n")
 		end
 	end
 	if arg and arg[0] == debug.getinfo(1, "S").source:sub(2) then
