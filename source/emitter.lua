@@ -34,7 +34,7 @@ local function serialize_aliases(aliases)
 	return "{\n" .. table.concat(parts, ",\n") .. "\n}"
 end
 
-local function prepare_source(src, cfg)
+local function prepare_source(name, src, cfg)
 	-- rewrite allowed dynamic require
 	local resolve = cfg.resolve
 	if resolve then
@@ -43,7 +43,7 @@ local function prepare_source(src, cfg)
 		local count
 		src, count = Lexer.rewrite_requires(src, reqs)
 		if count > 0 and cfg.debug then
-			print(string.format("[emitter] rewrote %d dynamic require(s)", count))
+			print(string.format("[emitter] rewrote %d dynamic require(s) in `%s`", count, name))
 		end
 	end
 
@@ -97,12 +97,11 @@ function Emitter.generate(cfg, files)
 			name = f.name,
 			path = f.path,
 			src = f.src,
-			body = prepare_source(f.src, cfg),
+			body = prepare_source(f.name, f.src, cfg),
 		}
 	end
 
 	local out = {}
-
 	local timestamp = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or "unknown"
 	out[#out + 1] = string.format("--[[ LuaOne | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
 
@@ -133,7 +132,7 @@ function Emitter.generate(cfg, files)
 
 	for _, mod in ipairs(modules) do
 		local body = trim_trailing(mod.body)
-		out[#out + 1] = "-- " .. mod.name .. "  <-  " .. mod.path
+		out[#out + 1] = "-- " .. mod.name .. " <- " .. mod.path
 		out[#out + 1] = string.format("__loaders__[%q] = function(...)", mod.name)
 		out[#out + 1] = indent(body, 3)
 		out[#out + 1] = "end\n"
