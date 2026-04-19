@@ -29,6 +29,8 @@ lua bundler.lua --entry source/main.lua --src ./ --out dist/bundle.lua
 - `--name <id>` name of the exported variable
 - `--config <file>` path to the config file
 - `--strip all|non_ann` strip comments from the output
+- `--compact` enable compact output
+- `--resolve` resolve possible dynamic dependencies
 - `--debug` print dependency resolution logs
 - `--verify` require the generated bundle after writing to verify it
 - `--help` show help
