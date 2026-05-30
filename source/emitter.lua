@@ -34,10 +34,10 @@ local function serialize_aliases(aliases)
 	return "{\n" .. table.concat(parts, ",\n") .. "\n}"
 end
 
+-- Apply comment stripping and optional dynamic-require rewriting to one
+-- module's source, according to cfg.
 local function prepare_source(name, src, cfg)
-	-- rewrite allowed dynamic require
-	local resolve = cfg.resolve
-	if resolve then
+	if cfg.resolve then
 		local tokens = Lexer.tokenize(src)
 		local reqs = Lexer.find_requires(tokens)
 		local count
@@ -52,8 +52,9 @@ local function prepare_source(name, src, cfg)
 		return src
 	end
 	if mode ~= "all" and mode ~= "non_ann" then
-		error("unknown strip value: " .. tostring(mode), 2)
+		error("unknown strip mode: " .. tostring(mode), 2)
 	end
+
 	return Lexer.strip(src, {
 		keep_annotations = (mode == "non_ann"),
 		keep_module = true,
@@ -87,10 +88,12 @@ local require = function(name)
 end
 ]]
 
----@param cfg table
----@param files table[] each entry must have .name .path .src
----@return string
+--- Generates bundled code.
+--- @param cfg table
+--- @param files table[] Each entry must have .name .path .src
+--- @return string
 function Emitter.generate(cfg, files)
+	-- Pre-process every file
 	local modules = {}
 	for _, f in ipairs(files) do
 		modules[#modules + 1] = {
@@ -101,6 +104,7 @@ function Emitter.generate(cfg, files)
 		}
 	end
 
+	-- Header
 	local out = {}
 	local timestamp = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or "unknown"
 	out[#out + 1] = string.format("--[[ OneLua | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
@@ -112,7 +116,6 @@ function Emitter.generate(cfg, files)
 		out[#out + 1] = banner("TYPE ANNOTATIONS")
 		out[#out + 1] = "-- Extracted from source modules."
 		out[#out + 1] = "-- Hoisted to top level so lua-language-server can index them."
-		out[#out + 1] = "-- Regenerate by re-running the bundler."
 		out[#out + 1] = "--"
 		for _, line in ipairs(ann_lines) do
 			out[#out + 1] = line
@@ -129,7 +132,6 @@ function Emitter.generate(cfg, files)
 	-- Module loaders
 	out[#out + 1] = banner("MODULES")
 	out[#out + 1] = ""
-
 	for _, mod in ipairs(modules) do
 		local body = trim_trailing(mod.body)
 		out[#out + 1] = "-- " .. mod.name .. " <- " .. mod.path
@@ -138,14 +140,13 @@ function Emitter.generate(cfg, files)
 		out[#out + 1] = "end\n"
 	end
 
+	-- Entry point
+	local export_name = cfg.name or cfg.entry:match("[^%.]+$") or "lib"
 	out[#out + 1] = banner("ENTRY")
 	out[#out + 1] = ""
 	out[#out + 1] = string.format("---@module '%s'", cfg.entry)
-
-	local name = cfg.name or cfg.entry:match("[^%.]+$") or "lib"
-	out[#out + 1] = string.format("local %s = __require__(%q)", name, cfg.entry)
-	out[#out + 1] = string.format("return %s", name)
-
+	out[#out + 1] = string.format("local %s = __require__(%q)", export_name, cfg.entry)
+	out[#out + 1] = string.format("return %s", export_name)
 	return table.concat(out, "\n")
 end
 

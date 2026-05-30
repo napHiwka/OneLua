@@ -1,12 +1,14 @@
+-- Resolves different file paths
+
 local Resolver = {}
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
 
 local function ensure_dir(path)
 	local dir = path:match("^(.*)[/\\][^/\\]+$")
 	if not dir or dir == "" then
 		return
 	end
-	local sep = package.config:sub(1, 1)
-	if sep == "\\" then
+	if IS_WINDOWS then
 		os.execute('mkdir "' .. dir:gsub("/", "\\") .. '" 2>nul')
 	else
 		os.execute('mkdir -p "' .. dir .. '"')
@@ -20,19 +22,15 @@ local function normalize_dir(dir)
 	return dir:match("[/\\]$") and dir or dir .. "/"
 end
 
-local function name_to_path(name)
-	return name:gsub("%.", "/")
-end
-
 local function normalize_slashes(path)
 	return (path:gsub("\\", "/"))
 end
 
-local function trim_lua_extension(name)
-	return (name:gsub("%.lua$", ""))
+local function trim_lua_extension(path)
+	return (path:gsub("%.lua$", ""))
 end
 
-local function trim_leading_current_dir(path)
+local function trim_leading_dot_slash(path)
 	return (path:gsub("^%./", ""))
 end
 
@@ -40,13 +38,19 @@ local function starts_with(text, prefix)
 	return text:sub(1, #prefix) == prefix
 end
 
+-- "some/path/to/mod" -> "some.path.to.mod"
 local function path_to_module_name(path)
 	path = normalize_slashes(path)
-	path = trim_leading_current_dir(path)
+	path = trim_leading_dot_slash(path)
 	path = trim_lua_extension(path)
 	path = path:gsub("/init$", "")
 	path = path:gsub("^/", "")
 	return (path:gsub("/", "."))
+end
+
+-- "mod.sub.name" -> "mod/sub/name"
+local function module_to_path(name)
+	return name:gsub("%.", "/")
 end
 
 local function try_open(path)
@@ -57,42 +61,32 @@ local function try_open(path)
 	end
 end
 
----Resolve a module name to an absolute (or relative) file path.
----@param name string dotted module name, e.g. "database.config"
----@param src string base directory to search in
----@return string|nil file path or nil if not found locally
-function Resolver.resolve(name, src)
-	local base = normalize_dir(src) .. name_to_path(name)
+--- Find the filesystem path for a module name, searching under src_dir.
+--- Tries <src>/<name-as-path>.lua and <src>/<name-as-path>/init.lua.
+function Resolver.resolve(name, src_dir)
+	local base = normalize_dir(src_dir) .. module_to_path(name)
 	return try_open(base .. ".lua") or try_open(base .. "/init.lua")
 end
 
----Normalize a module spec passed by user input or config.
----Accepts module names, bare file names, and relative file paths.
----@param spec string
----@param src string
----@return string
-function Resolver.normalize_module_name(spec, src)
-	local normalized = normalize_slashes(spec)
-	local src_prefix = trim_leading_current_dir(normalize_slashes(normalize_dir(src)))
+--- Normalise an arbitrary specifier (relative path, dot-name, etc.) to a
+--- canonical module name relative to src_dir.
+function Resolver.normalize_module_name(spec, src_dir)
+	local norm = normalize_slashes(spec)
+	local src_prefix = trim_leading_dot_slash(normalize_slashes(normalize_dir(src_dir)))
+	norm = trim_leading_dot_slash(norm)
+	norm = trim_lua_extension(norm)
 
-	normalized = trim_leading_current_dir(normalized)
-	normalized = trim_lua_extension(normalized)
-
-	if src_prefix ~= "" and starts_with(normalized, src_prefix) then
-		normalized = normalized:sub(#src_prefix + 1)
+	if src_prefix ~= "" and starts_with(norm, src_prefix) then
+		norm = norm:sub(#src_prefix + 1)
 	end
 
-	if normalized:match("[/\\]") then
-		normalized = path_to_module_name(normalized)
+	if norm:match("[/\\]") then
+		norm = path_to_module_name(norm)
 	end
-
-	return normalized
+	return norm
 end
 
----Read a file's contents, normalising line endings
----Raises an error if the file cannot be opened
----@param path string
----@return string
+--- Read a file, normalising line endings to "\n".
 function Resolver.read(path)
 	local f, err = io.open(path, "r")
 	if not f then
@@ -103,9 +97,7 @@ function Resolver.read(path)
 	return (src:gsub("\r\n", "\n"):gsub("\r", "\n"))
 end
 
----Write content to a file; raises on failure
----@param path string
----@param content string
+--- Write content to path, creating intermediate directories if needed.
 function Resolver.write(path, content)
 	ensure_dir(path)
 	local f, err = io.open(path, "w")

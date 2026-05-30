@@ -9,7 +9,7 @@
 --   lua onelua.lua --config bundler.config.lua
 --   lua onelua.lua --help
 
-local SELF_DIR = ((debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./")
+local SELF_DIR = (debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./"
 package.path = SELF_DIR .. "?.lua;" .. SELF_DIR .. "?/init.lua;" .. package.path
 
 local Discover = require("source.discover")
@@ -20,12 +20,12 @@ local Cli = require("source.cli")
 local Bundler = {}
 Bundler.Cli = Cli
 
+-- require bundle to confirm it loads without errors
 local function verify_bundle(out)
 	local dir = out:match("^(.*[/\\])") or "./"
 	local name = out:match("([^/\\]+)%.lua$")
-
 	if not name then
-		print("[bundler] verify: skipped (cannot extract module name)")
+		print("[bundler] verify: skipped (cannot extract module name from path)")
 		return
 	end
 
@@ -33,15 +33,14 @@ local function verify_bundle(out)
 	package.path = dir .. "?.lua;" .. prev_path
 	package.loaded[name] = nil
 
-	-- isolate CLI triggers
-	local old_arg = _G.arg
+	-- Suppress arg so the bundle doesn't think it's being run as a script.
+	local saved_arg = _G.arg
 	_G.arg = nil
 
 	print("[bundler] verifying...")
 	local ok, result = pcall(require, name)
 
-	-- restore
-	_G.arg = old_arg
+	_G.arg = saved_arg
 	package.path = prev_path
 	package.loaded[name] = nil
 
@@ -50,7 +49,6 @@ local function verify_bundle(out)
 	end
 
 	print("[bundler] verify OK: " .. tostring(result))
-
 	if type(result) == "table" then
 		local keys = {}
 		for k in pairs(result) do
@@ -72,8 +70,8 @@ end
 ---@field strip "all"|"non_ann"|false? Strip mode. `"all"` removes all comments; `"non_ann"` keeps `---@` annotation lines.
 ---@field compact boolean? Collapse consecutive blank lines in stripped output.
 ---@field resolve boolean? Rewrite statically-detectable dynamic `require()` calls before bundling.
----@field debug boolean? Print verbose discovery and rewrite output.
----@field verify boolean? Load the bundle after writing to verify it executes cleanly.
+---@field debug boolean? Print verbose discovery and rewrite info in output.
+---@field verify boolean? Load the bundle after writing to verify it requires without error.
 ---@param cfg BundlerConfig
 ---@return boolean
 function Bundler.bundle(cfg)
@@ -105,7 +103,6 @@ function Bundler.bundle(cfg)
 	if cfg.verify then
 		verify_bundle(cfg.out)
 	end
-
 	return true
 end
 
@@ -114,15 +111,15 @@ function Bundler.run_cli(args)
 	if not cfg then
 		return
 	end
-
 	local ok, err = pcall(Bundler.bundle, cfg)
 	if not ok then
 		error("[bundler] fatal: " .. tostring(err) .. "\n")
 	end
 end
 
+-- Run directly when invoked as a script.
 if arg and arg[0] == debug.getinfo(1, "S").source:sub(2) then
-	Bundler.run_cli(arg or {})
+	Bundler.run_cli(arg)
 end
 
 return Bundler

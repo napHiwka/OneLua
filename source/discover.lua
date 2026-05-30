@@ -5,25 +5,24 @@ local Resolver = require("source.resolver")
 
 local Discover = {}
 
----Returns files in depth-first order (deps before dependents).
----Each entry: { name, path, src }.
----@param entry string
----@param src string
----@param opts table?
+--- Walks the dependency graph starting from `entry`, resolving `require()`
+--- calls recursively within `src_dir`. Files are returned in depth-first
+--- order (dependencies before dependents).
+---@param entry string Entry module name.
+---@param src_dir string Root source directory.
+---@param opts? table
 ---@return table files
 ---@return table warnings
-function Discover.run(entry, src, opts)
+function Discover.run(entry, src_dir, opts)
 	opts = opts or {}
 
-	local hint_shown = false
 	local debug_mode = opts.debug or false
-
-	local visited = {}
-	local resolved = {}
-	local warned_lines = {}
-
+	local visited = {} -- name -> true, prevents re-processing
+	local resolved = {} -- name -> path|false, caches Resolver.resolve results
+	local warned = {} -- "path:line" -> true, deduplicates dynamic-require warnings
 	local files = {}
 	local warnings = {}
+	local hint_shown = false
 
 	local function log(msg)
 		if debug_mode then
@@ -31,14 +30,14 @@ function Discover.run(entry, src, opts)
 		end
 	end
 
-	local function note_warn(msg)
+	local function warn(msg)
 		warnings[#warnings + 1] = msg
 		print("WARN: " .. msg)
 	end
 
-	local function resolve_local(name)
+	local function resolve_cached(name)
 		if resolved[name] == nil then
-			resolved[name] = Resolver.resolve(name, src) or false
+			resolved[name] = Resolver.resolve(name, src_dir) or false
 		end
 		return resolved[name] or nil
 	end
@@ -52,43 +51,39 @@ function Discover.run(entry, src, opts)
 		visited[name] = true
 		log("processing: " .. name)
 
-		local path = resolve_local(name)
+		local path = resolve_cached(name)
 		if not path then
-			error("module not found: '" .. name .. "'  (searched in " .. src .. ")", 0)
+			error("module not found: '" .. name .. "'  (searched in " .. src_dir .. ")", 0)
 		end
 
-		local file_src = Resolver.read(path)
-		local tokens = Lexer.tokenize(file_src)
+		local src = Resolver.read(path)
+		local tokens = Lexer.tokenize(src)
 
 		if follow_requires then
 			local reqs = Lexer.find_requires(tokens)
+			-- Build a line-indexed table for warning snippets
 			local src_lines = {}
-
-			for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
+			for ln in (src .. "\n"):gmatch("([^\n]*)\n") do
 				src_lines[#src_lines + 1] = ln
 			end
 
 			for _, req in ipairs(reqs) do
 				if req.kind == "static" then
-					local resolved_path = resolve_local(req.value)
-					if resolved_path then
+					if resolve_cached(req.value) then
 						visit(req.value, true)
 					else
 						log("external (skipping): " .. req.value)
 					end
 				else
-					local warning_key = path .. ":" .. tostring(req.line)
-
-					if not warned_lines[warning_key] then
-						warned_lines[warning_key] = true
-
+					local key = path .. ":" .. tostring(req.line)
+					if not warned[key] then
+						warned[key] = true
 						if not hint_shown then
 							log("dynamic require(s) found; use 'extra' or 'aliases' in config")
 							hint_shown = true
 						end
 
 						local snippet = (src_lines[req.line] or "?"):match("^%s*(.-)%s*$")
-
 						local hints = ""
 						if req.hint then
 							hints = hints .. '  lead:"' .. req.hint .. '"'
@@ -96,34 +91,23 @@ function Discover.run(entry, src, opts)
 						if req.hint_trail then
 							hints = hints .. '  trail:"' .. req.hint_trail .. '"'
 						end
-
-						note_warn("dynamic require at " .. path .. ":" .. req.line .. hints .. " -> " .. snippet)
+						warn("dynamic require at " .. path .. ":" .. req.line .. hints .. " -> " .. snippet)
 					end
 				end
 			end
 		end
-
-		files[#files + 1] = {
-			name = name,
-			path = path,
-			src = file_src,
-		}
-
+		files[#files + 1] = { name = name, path = path, src = src }
 		log("added: " .. name)
 	end
 
 	visit(entry, true)
-
 	for _, name in ipairs(opts.extra_names or {}) do
-		local path = resolve_local(name)
-
-		if not path then
-			note_warn("extra module '" .. name .. "' not found in " .. src)
+		if not resolve_cached(name) then
+			warn("extra module '" .. name .. "' not found in " .. src_dir)
 		else
 			visit(name, not opts.skip_extra_files_requires)
 		end
 	end
-
 	return files, warnings
 end
 

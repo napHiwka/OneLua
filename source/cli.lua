@@ -1,10 +1,10 @@
--- Default config file name searched
+-- Command line interface
+
+local CLI = {}
 local DEFAULT_CONFIG = "bundler.config.lua"
 local FALLBACK_CONFIG = "bundlerConfig.lua"
 
-local CLI = {}
-
--- Concat in order to not compress the lines in help message
+-- Workaround with `concat` to avoid compressing strings in the generated module
 local HELP = table.concat({
 	"OneLua - bundle a Lua project into a single file",
 	"",
@@ -35,7 +35,8 @@ local HELP = table.concat({
 	"  lua bundler.lua --config release.config.lua --strip all --out dist/lib.lua",
 }, "\n")
 
-local function next_arg(args, i, flag)
+-- Asserts that the next positional argument exists
+local function require_arg(args, i, flag)
 	local v = args[i + 1]
 	if not v or v:sub(1, 2) == "--" then
 		error("option " .. flag .. " requires an argument", 0)
@@ -43,55 +44,7 @@ local function next_arg(args, i, flag)
 	return v
 end
 
-local function parse_args(args)
-	local flags = {}
-	local i = 1
-
-	while i <= #args do
-		local a = args[i]
-
-		if a == "--help" or a == "-h" then
-			flags.help = true
-		elseif a == "--debug" then
-			flags.debug = true
-		elseif a == "--verify" then
-			flags.verify = true
-		elseif a == "--resolve" then
-			flags.resolve = true
-		elseif a == "--compact" then
-			flags.compact = true
-		elseif a == "--entry" then
-			flags.entry = next_arg(args, i, "--entry")
-			i = i + 1
-		elseif a == "--src" then
-			flags.src = next_arg(args, i, "--src")
-			i = i + 1
-		elseif a == "--out" then
-			flags.out = next_arg(args, i, "--out")
-			i = i + 1
-		elseif a == "--name" then
-			flags.name = next_arg(args, i, "--name")
-			i = i + 1
-		elseif a == "--strip" then
-			local mode = next_arg(args, i, "--strip")
-			i = i + 1
-			if mode ~= "all" and mode ~= "non_ann" then
-				return nil, "--strip must be 'all' or 'non_ann'"
-			end
-			flags.strip = mode
-		elseif a == "--config" then
-			flags.config_path = next_arg(args, i, "--config")
-			i = i + 1
-		else
-			return nil, "unknown option: " .. tostring(a)
-		end
-
-		i = i + 1
-	end
-
-	return flags
-end
-
+-- Shallow-merge two tables
 local function merge(base, overrides)
 	local result = {}
 	for k, v in pairs(base or {}) do
@@ -120,7 +73,8 @@ local function load_config(path)
 	return cfg
 end
 
-local function detect_config_path(preferred)
+-- Find and load a config file
+local function detect_config(preferred)
 	if preferred then
 		local cfg = load_config(preferred)
 		if not cfg then
@@ -128,22 +82,57 @@ local function detect_config_path(preferred)
 		end
 		return preferred, cfg
 	end
-
-	local candidates = { DEFAULT_CONFIG, FALLBACK_CONFIG }
-	for _, path in ipairs(candidates) do
+	for _, path in ipairs({ DEFAULT_CONFIG, FALLBACK_CONFIG }) do
 		local cfg = load_config(path)
 		if cfg then
 			return path, cfg
 		end
 	end
+	return nil, nil
 end
 
----@param args string[]
----@return table|nil
 function CLI.parse(args)
-	local flags, parse_msg = parse_args(args)
-	if not flags then
-		error(parse_msg .. "\n  run with --help for usage", 0)
+	-- Parse raw CLI flags into a flags table
+	local flags = {}
+	local i = 1
+	while i <= #args do
+		local a = args[i]
+		if a == "--help" or a == "-h" then
+			flags.help = true
+		elseif a == "--debug" then
+			flags.debug = true
+		elseif a == "--verify" then
+			flags.verify = true
+		elseif a == "--resolve" then
+			flags.resolve = true
+		elseif a == "--compact" then
+			flags.compact = true
+		elseif a == "--entry" then
+			flags.entry = require_arg(args, i, a)
+			i = i + 1
+		elseif a == "--src" then
+			flags.src = require_arg(args, i, a)
+			i = i + 1
+		elseif a == "--out" then
+			flags.out = require_arg(args, i, a)
+			i = i + 1
+		elseif a == "--name" then
+			flags.name = require_arg(args, i, a)
+			i = i + 1
+		elseif a == "--config" then
+			flags.config_path = require_arg(args, i, a)
+			i = i + 1
+		elseif a == "--strip" then
+			local mode = require_arg(args, i, a)
+			i = i + 1
+			if mode ~= "all" and mode ~= "non_ann" then
+				error("--strip must be 'all' or 'non_ann'", 0)
+			end
+			flags.strip = mode
+		else
+			error("unknown option: " .. tostring(a) .. "\n  run with --help for usage", 0)
+		end
+		i = i + 1
 	end
 
 	if flags.help then
@@ -151,14 +140,13 @@ function CLI.parse(args)
 		return nil
 	end
 
-	local config_path, file_cfg = detect_config_path(flags.config_path)
-
+	local config_path, file_cfg = detect_config(flags.config_path)
 	if config_path then
 		print("[bundler] using config: " .. config_path)
 	end
-	file_cfg = file_cfg or {}
 
-	local cfg = merge(file_cfg, {
+	-- CLI flags take precedence over file config
+	local cfg = merge(file_cfg or {}, {
 		entry = flags.entry,
 		src = flags.src,
 		out = flags.out,
@@ -178,11 +166,11 @@ function CLI.parse(args)
 	cfg.verify = cfg.verify or false
 	cfg.resolve = cfg.resolve or false
 
+	-- Show help when invoked with no arguments and no config file found
 	if #args == 0 and not config_path then
 		print(HELP)
 		return nil
 	end
-
 	return cfg
 end
 
