@@ -34,7 +34,7 @@ function Annotations.extract(src)
 	local result = {}
 	local in_def = false -- are we inside a definition block?
 
-	for line in (src):gmatch("([^\n]*)\n") do
+	for line in (src .. "\n"):gmatch("([^\n]*)\n") do
 		lines[#lines + 1] = line
 	end
 
