@@ -103,7 +103,7 @@ function Emitter.generate(cfg, files)
 
 	local out = {}
 	local timestamp = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or "unknown"
-	out[#out + 1] = string.format("--[[ LuaOne | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
+	out[#out + 1] = string.format("--[[ OneLua | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
 
 	-- Type annotations
 	local ann_lines = Annotations.collect(modules)
