@@ -14,8 +14,8 @@ OneLua bundles a Lua project into a single distributable `.lua` file.
 - Supports aliases and extra files
 - Compatible with Lua 5.1+
 
-> A static require is when the module path is a constant string known at analysis time.
-> A dynamic require is when the module path is computed at runtime, preventing static analysis tools from resolving it.
+> A static require is when the path to the module is a constant string known at analysis time.
+> A dynamic require is when the path to the module is evaluated at runtime, which prevents static analysis tools from resolving it.
 
 ## CLI
 
