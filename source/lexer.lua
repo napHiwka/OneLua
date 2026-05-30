@@ -1,9 +1,6 @@
 -- Dumb lexer for static require analysis character-by-character
--- It's not the most effective, but it gets the job done
--- There will be a lot of comments
 
 local Lexer = {}
-
 Lexer.T = {
 	IDENT = "IDENT",
 	STRING = "STRING",
@@ -13,7 +10,6 @@ Lexer.T = {
 	OTHER = "OTHER",
 }
 local T = Lexer.T
-
 local REQUIRE_KEYWORD = "require"
 
 -- Returns the character at position (i + off) in src, or "" if out of bounds.
@@ -164,7 +160,7 @@ function Lexer.tokenize(src)
 				local cs, _, next_pos, closed = long_bracket_span(src, i + 3, n)
 				if cs then
 					if not closed then
-						print("[lexer]: unclosed block comment at line " .. line)
+						print("[lexer] warning: unclosed block comment at line " .. line)
 					end
 					advance_to(next_pos)
 					is_block = true
@@ -187,7 +183,7 @@ function Lexer.tokenize(src)
 			local cs, ce, next_pos, closed = long_bracket_span(src, i + 1, n)
 			if cs then
 				if not closed then
-					print("[lexer]: unclosed long string at line " .. line)
+					print("[lexer] warning: unclosed long string at line " .. line)
 				end
 				push(T.STRING, src:sub(cs, ce)) -- content only, no bracket delimiters
 				advance_to(next_pos)
@@ -257,6 +253,11 @@ function Lexer.tokenize(src)
 						skip()
 					end
 				end
+				-- LuaJIT integer suffixes: ULL, LL, i - consume so they don't
+				-- become stray IDENT tokens.
+				while i <= n and ch():match("^[UuLlIi]$") do
+					skip()
+				end
 			else
 				-- Decimal integer part.
 				while i <= n and ch():match("^%d$") do
@@ -297,7 +298,6 @@ function Lexer.tokenize(src)
 			skip()
 		end
 	end
-
 	return tokens
 end
 
@@ -386,7 +386,6 @@ function Lexer.find_requires(tokens)
 			end
 			j = j + 1
 		end
-
 		return table.concat(parts), j
 	end
 
@@ -472,7 +471,6 @@ function Lexer.find_requires(tokens)
 			i = i + 1
 		end
 	end
-
 	return results
 end
 
@@ -482,13 +480,12 @@ local function compact_lines(src)
 
 	-- The pattern "([^\n]*)(\n?)" splits src into (line-content, newline) pairs.
 	-- It produces one extra empty-pair at EOF; we break out of the loop there.
-	for line, nl in src:gmatch("([^\n]*)(\n?)") do
-		if line == "" and nl == "" then
+	for raw_line, nl in src:gmatch("([^\n]*)(\n?)") do
+		if raw_line == "" and nl == "" then
 			break
 		end
 
-		line = line:gsub("[ \t]+$", "") -- strip trailing whitespace
-
+		local line = raw_line:gsub("[ \t]+$", "") -- strip trailing whitespace
 		if line ~= "" then
 			-- If at least one blank line preceded this non-blank line (and we
 			-- have already emitted something), insert a single blank separator.
@@ -504,7 +501,6 @@ local function compact_lines(src)
 			pending = pending or (#lines > 0)
 		end
 	end
-
 	return table.concat(lines)
 end
 
@@ -554,7 +550,7 @@ function Lexer.strip(src, opts)
 				local cs, _, next_pos, closed = long_bracket_span(src, i + 3, n)
 				if cs then
 					if not closed then
-						print("[lexer]: unclosed block comment")
+						print("[lexer] warning: unclosed block comment")
 					end
 
 					-- The comment body is dropped, but we must preserve its
@@ -597,7 +593,7 @@ function Lexer.strip(src, opts)
 			local cs, _, next_pos, closed = long_bracket_span(src, i + 1, n)
 			if cs then
 				if not closed then
-					print("[lexer]: unclosed long string")
+					print("[lexer] warning: unclosed long string")
 				end
 				-- Long strings are content, not comments; copy verbatim
 				-- including the surrounding bracket delimiters.
@@ -629,16 +625,16 @@ function Lexer.strip(src, opts)
 end
 
 -- Rewrites dynamic require(IDENTIFIER .. "str") -> require("str")
--- and        require("str" .. IDENTIFIER) -> require("str")
--- Returns (new_src, count)
+-- and require("str" .. IDENTIFIER) -> require("str").
+-- Returns (rewritten_src, count_of_rewrites)
 function Lexer.rewrite_requires(src, reqs)
+	-- Build a line -> target_module map for lines that can be rewritten.
 	local line_map = {}
 	for _, r in ipairs(reqs) do
 		if r.rewrite_as then
 			line_map[r.line] = r.rewrite_as
 		end
 	end
-
 	if not next(line_map) then
 		return src, 0
 	end
@@ -647,9 +643,10 @@ function Lexer.rewrite_requires(src, reqs)
 	local out = {}
 	local ln = 0
 
-	for line in (src .. "\n"):gmatch("([^\n]*)\n") do
+	for raw_line in (src .. "\n"):gmatch("([^\n]*)\n") do
 		ln = ln + 1
 		local target = line_map[ln]
+		local outline
 		if target then
 			-- Escape target for use in a Lua pattern, then again for the
 			-- replacement string (% in replacements has special meaning).
@@ -659,19 +656,20 @@ function Lexer.rewrite_requires(src, reqs)
 
 			local n1, n2
 			-- require( IDENT .. "target" )
-			line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
+			outline, n1 = raw_line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
 			-- require( "target" .. IDENT )
-			line, n2 = line:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
+			outline, n2 = outline:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
 			total = total + n1 + n2
+		else
+			outline = raw_line
 		end
-		out[#out + 1] = line
+		out[#out + 1] = outline
 	end
 
 	-- remove the extra empty line at the end from the additional "\n"
 	if out[#out] == "" then
 		out[#out] = nil
 	end
-
 	return table.concat(out, "\n"), total
 end
 return Lexer
