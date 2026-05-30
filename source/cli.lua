@@ -35,6 +35,14 @@ local HELP = table.concat({
 	"  lua bundler.lua --config release.config.lua --strip all --out dist/lib.lua",
 }, "\n")
 
+local function next_arg(args, i, flag)
+	local v = args[i + 1]
+	if not v or v:sub(1, 2) == "--" then
+		error("option " .. flag .. " requires an argument", 0)
+	end
+	return v
+end
+
 local function parse_args(args)
 	local flags = {}
 	local i = 1
@@ -53,27 +61,27 @@ local function parse_args(args)
 		elseif a == "--compact" then
 			flags.compact = true
 		elseif a == "--entry" then
+			flags.entry = next_arg(args, i, "--entry")
 			i = i + 1
-			flags.entry = args[i]
 		elseif a == "--src" then
+			flags.src = next_arg(args, i, "--src")
 			i = i + 1
-			flags.src = args[i]
 		elseif a == "--out" then
+			flags.out = next_arg(args, i, "--out")
 			i = i + 1
-			flags.out = args[i]
 		elseif a == "--name" then
+			flags.name = next_arg(args, i, "--name")
 			i = i + 1
-			flags.name = args[i]
 		elseif a == "--strip" then
+			local mode = next_arg(args, i, "--strip")
 			i = i + 1
-			local mode = args[i]
 			if mode ~= "all" and mode ~= "non_ann" then
 				return nil, "--strip must be 'all' or 'non_ann'"
 			end
 			flags.strip = mode
 		elseif a == "--config" then
+			flags.config_path = next_arg(args, i, "--config")
 			i = i + 1
-			flags.config_path = args[i]
 		else
 			return nil, "unknown option: " .. tostring(a)
 		end
