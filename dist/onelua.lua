@@ -1,11 +1,10 @@
---[[ LuaOne | entry: bundler | modules: 7 | 2026-04-17T11:33:46Z ]]
+--[[ OneLua | entry: bundler | modules: 7 | 2026-05-30T20:53:00Z ]]
 
 --------------------------------------------------------------------------
 -- TYPE ANNOTATIONS
 --------------------------------------------------------------------------
 -- Extracted from source modules.
 -- Hoisted to top level so lua-language-server can index them.
--- Regenerate by re-running the bundler.
 --
 ---@class BundlerConfig
 ---@field entry string Module name to use as the entry point (required).
@@ -18,8 +17,8 @@
 ---@field strip "all"|"non_ann"|false? Strip mode. `"all"` removes all comments; `"non_ann"` keeps `---@` annotation lines.
 ---@field compact boolean? Collapse consecutive blank lines in stripped output.
 ---@field resolve boolean? Rewrite statically-detectable dynamic `require()` calls before bundling.
----@field debug boolean? Print verbose discovery and rewrite output.
----@field verify boolean? Load the bundle after writing to verify it executes cleanly.
+---@field debug boolean? Print verbose discovery and rewrite info in output.
+---@field verify boolean? Load the bundle after writing to verify it requires without error.
 
 --------------------------------------------------------------------------
 -- RUNTIME
@@ -152,7 +151,7 @@ __loaders__["source.lexer"] = function(...)
 					local cs, _, next_pos, closed = long_bracket_span(src, i + 3, n)
 					if cs then
 						if not closed then
-							print("[lexer]: unclosed block comment at line " .. line)
+							print("[lexer] warning: unclosed block comment at line " .. line)
 						end
 						advance_to(next_pos)
 						is_block = true
@@ -167,7 +166,7 @@ __loaders__["source.lexer"] = function(...)
 				local cs, ce, next_pos, closed = long_bracket_span(src, i + 1, n)
 				if cs then
 					if not closed then
-						print("[lexer]: unclosed long string at line " .. line)
+						print("[lexer] warning: unclosed long string at line " .. line)
 					end
 					push(T.STRING, src:sub(cs, ce))
 					advance_to(next_pos)
@@ -220,6 +219,9 @@ __loaders__["source.lexer"] = function(...)
 						while i <= n and ch():match("^%d$") do
 							skip()
 						end
+					end
+					while i <= n and ch():match("^[UuLlIi]$") do
+						skip()
 					end
 				else
 					while i <= n and ch():match("^%d$") do
@@ -375,11 +377,11 @@ __loaders__["source.lexer"] = function(...)
 	local function compact_lines(src)
 		local lines = {}
 		local pending = false
-		for line, nl in src:gmatch("([^\n]*)(\n?)") do
-			if line == "" and nl == "" then
+		for raw_line, nl in src:gmatch("([^\n]*)(\n?)") do
+			if raw_line == "" and nl == "" then
 				break
 			end
-			line = line:gsub("[ \t]+$", "")
+			local line = raw_line:gsub("[ \t]+$", "")
 			if line ~= "" then
 				if pending and #lines > 0 then
 					lines[#lines + 1] = "\n"
@@ -429,7 +431,7 @@ __loaders__["source.lexer"] = function(...)
 					local cs, _, next_pos, closed = long_bracket_span(src, i + 3, n)
 					if cs then
 						if not closed then
-							print("[lexer]: unclosed block comment")
+							print("[lexer] warning: unclosed block comment")
 						end
 						local nl_count = 0
 						for _ in src:sub(i, next_pos - 1):gmatch("\n") do
@@ -459,7 +461,7 @@ __loaders__["source.lexer"] = function(...)
 				local cs, _, next_pos, closed = long_bracket_span(src, i + 1, n)
 				if cs then
 					if not closed then
-						print("[lexer]: unclosed long string")
+						print("[lexer] warning: unclosed long string")
 					end
 					emit(src:sub(i, next_pos - 1))
 					i = next_pos
@@ -493,19 +495,24 @@ __loaders__["source.lexer"] = function(...)
 		local total = 0
 		local out = {}
 		local ln = 0
-		for line in (src .. "\n"):gmatch("([^\n]*)\n") do
+		for raw_line in (src .. "\n"):gmatch("([^\n]*)\n") do
 			ln = ln + 1
 			local target = line_map[ln]
+			local outline
 			if target then
 				local pat_esc = target:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
 				local repl_raw = 'require("' .. target .. '")'
 				local repl = repl_raw:gsub("%%", "%%%%")
 				local n1, n2
-				line, n1 = line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
-				line, n2 = line:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
+				outline, n1 =
+					raw_line:gsub("require%s*%(%s*[%w_][%w_%.]-%s*%.%.%s*[\"']" .. pat_esc .. "[\"']%s*%)", repl)
+				outline, n2 =
+					outline:gsub("require%s*%(%s*[\"']" .. pat_esc .. "[\"']%s*%.%.%s*[%w_][%w_%.]+%s*%)", repl)
 				total = total + n1 + n2
+			else
+				outline = raw_line
 			end
-			out[#out + 1] = line
+			out[#out + 1] = outline
 		end
 		if out[#out] == "" then
 			out[#out] = nil
@@ -518,13 +525,13 @@ end
 -- source.resolver <- ./source/resolver.lua
 __loaders__["source.resolver"] = function(...)
 	local Resolver = {}
+	local IS_WINDOWS = package.config:sub(1, 1) == "\\"
 	local function ensure_dir(path)
 		local dir = path:match("^(.*)[/\\][^/\\]+$")
 		if not dir or dir == "" then
 			return
 		end
-		local sep = package.config:sub(1, 1)
-		if sep == "\\" then
+		if IS_WINDOWS then
 			os.execute('mkdir "' .. dir:gsub("/", "\\") .. '" 2>nul')
 		else
 			os.execute('mkdir -p "' .. dir .. '"')
@@ -536,16 +543,13 @@ __loaders__["source.resolver"] = function(...)
 		end
 		return dir:match("[/\\]$") and dir or dir .. "/"
 	end
-	local function name_to_path(name)
-		return name:gsub("%.", "/")
-	end
 	local function normalize_slashes(path)
 		return (path:gsub("\\", "/"))
 	end
-	local function trim_lua_extension(name)
-		return (name:gsub("%.lua$", ""))
+	local function trim_lua_extension(path)
+		return (path:gsub("%.lua$", ""))
 	end
-	local function trim_leading_current_dir(path)
+	local function trim_leading_dot_slash(path)
 		return (path:gsub("^%./", ""))
 	end
 	local function starts_with(text, prefix)
@@ -553,11 +557,14 @@ __loaders__["source.resolver"] = function(...)
 	end
 	local function path_to_module_name(path)
 		path = normalize_slashes(path)
-		path = trim_leading_current_dir(path)
+		path = trim_leading_dot_slash(path)
 		path = trim_lua_extension(path)
 		path = path:gsub("/init$", "")
 		path = path:gsub("^/", "")
 		return (path:gsub("/", "."))
+	end
+	local function module_to_path(name)
+		return name:gsub("%.", "/")
 	end
 	local function try_open(path)
 		local f = io.open(path, "r")
@@ -566,22 +573,22 @@ __loaders__["source.resolver"] = function(...)
 			return path
 		end
 	end
-	function Resolver.resolve(name, src)
-		local base = normalize_dir(src) .. name_to_path(name)
+	function Resolver.resolve(name, src_dir)
+		local base = normalize_dir(src_dir) .. module_to_path(name)
 		return try_open(base .. ".lua") or try_open(base .. "/init.lua")
 	end
-	function Resolver.normalize_module_name(spec, src)
-		local normalized = normalize_slashes(spec)
-		local src_prefix = trim_leading_current_dir(normalize_slashes(normalize_dir(src)))
-		normalized = trim_leading_current_dir(normalized)
-		normalized = trim_lua_extension(normalized)
-		if src_prefix ~= "" and starts_with(normalized, src_prefix) then
-			normalized = normalized:sub(#src_prefix + 1)
+	function Resolver.normalize_module_name(spec, src_dir)
+		local norm = normalize_slashes(spec)
+		local src_prefix = trim_leading_dot_slash(normalize_slashes(normalize_dir(src_dir)))
+		norm = trim_leading_dot_slash(norm)
+		norm = trim_lua_extension(norm)
+		if src_prefix ~= "" and starts_with(norm, src_prefix) then
+			norm = norm:sub(#src_prefix + 1)
 		end
-		if normalized:match("[/\\]") then
-			normalized = path_to_module_name(normalized)
+		if norm:match("[/\\]") then
+			norm = path_to_module_name(norm)
 		end
-		return normalized
+		return norm
 	end
 	function Resolver.read(path)
 		local f, err = io.open(path, "r")
@@ -609,27 +616,27 @@ __loaders__["source.discover"] = function(...)
 	local Lexer = require("source.lexer")
 	local Resolver = require("source.resolver")
 	local Discover = {}
-	function Discover.run(entry, src, opts)
+	function Discover.run(entry, src_dir, opts)
 		opts = opts or {}
-		local hint_shown = false
 		local debug_mode = opts.debug or false
 		local visited = {}
 		local resolved = {}
-		local warned_lines = {}
+		local warned = {}
 		local files = {}
 		local warnings = {}
+		local hint_shown = false
 		local function log(msg)
 			if debug_mode then
 				print("[discover] " .. msg)
 			end
 		end
-		local function note_warn(msg)
+		local function warn(msg)
 			warnings[#warnings + 1] = msg
 			print("WARN: " .. msg)
 		end
-		local function resolve_local(name)
+		local function resolve_cached(name)
 			if resolved[name] == nil then
-				resolved[name] = Resolver.resolve(name, src) or false
+				resolved[name] = Resolver.resolve(name, src_dir) or false
 			end
 			return resolved[name] or nil
 		end
@@ -640,30 +647,29 @@ __loaders__["source.discover"] = function(...)
 			end
 			visited[name] = true
 			log("processing: " .. name)
-			local path = resolve_local(name)
+			local path = resolve_cached(name)
 			if not path then
-				error("module not found: '" .. name .. "'  (searched in " .. src .. ")", 0)
+				error("module not found: '" .. name .. "'  (searched in " .. src_dir .. ")", 0)
 			end
-			local file_src = Resolver.read(path)
-			local tokens = Lexer.tokenize(file_src)
+			local src = Resolver.read(path)
+			local tokens = Lexer.tokenize(src)
 			if follow_requires then
 				local reqs = Lexer.find_requires(tokens)
 				local src_lines = {}
-				for ln in (file_src .. "\n"):gmatch("([^\n]*)\n") do
+				for ln in (src .. "\n"):gmatch("([^\n]*)\n") do
 					src_lines[#src_lines + 1] = ln
 				end
 				for _, req in ipairs(reqs) do
 					if req.kind == "static" then
-						local resolved_path = resolve_local(req.value)
-						if resolved_path then
+						if resolve_cached(req.value) then
 							visit(req.value, true)
 						else
 							log("external (skipping): " .. req.value)
 						end
 					else
-						local warning_key = path .. ":" .. tostring(req.line)
-						if not warned_lines[warning_key] then
-							warned_lines[warning_key] = true
+						local key = path .. ":" .. tostring(req.line)
+						if not warned[key] then
+							warned[key] = true
 							if not hint_shown then
 								log("dynamic require(s) found; use 'extra' or 'aliases' in config")
 								hint_shown = true
@@ -676,23 +682,18 @@ __loaders__["source.discover"] = function(...)
 							if req.hint_trail then
 								hints = hints .. '  trail:"' .. req.hint_trail .. '"'
 							end
-							note_warn("dynamic require at " .. path .. ":" .. req.line .. hints .. " -> " .. snippet)
+							warn("dynamic require at " .. path .. ":" .. req.line .. hints .. " -> " .. snippet)
 						end
 					end
 				end
 			end
-			files[#files + 1] = {
-				name = name,
-				path = path,
-				src = file_src,
-			}
+			files[#files + 1] = { name = name, path = path, src = src }
 			log("added: " .. name)
 		end
 		visit(entry, true)
 		for _, name in ipairs(opts.extra_names or {}) do
-			local path = resolve_local(name)
-			if not path then
-				note_warn("extra module '" .. name .. "' not found in " .. src)
+			if not resolve_cached(name) then
+				warn("extra module '" .. name .. "' not found in " .. src_dir)
 			else
 				visit(name, not opts.skip_extra_files_requires)
 			end
@@ -718,13 +719,9 @@ __loaders__["source.annotations"] = function(...)
 		return line:match("^%s*%-%-%-%s*(@%a+)")
 	end
 	function Annotations.extract(src)
-		local lines = {}
 		local result = {}
 		local in_def = false
-		for line in (src):gmatch("([^\n]*)\n") do
-			lines[#lines + 1] = line
-		end
-		for _, line in ipairs(lines) do
+		for line in (src .. "\n"):gmatch("([^\n]*)\n") do
 			local tag = tag_of(line)
 			if tag then
 				local stripped = line:match("^%s*(.-)%s*$")
@@ -758,7 +755,7 @@ __loaders__["source.annotations"] = function(...)
 		return result
 	end
 	function Annotations.infer_return_class(src)
-		local last_class = nil
+		local last_class
 		for line in src:gmatch("[^\n]+") do
 			local cls = line:match("^%s*%-%-%-%s*@class%s+([%w_%.]+)")
 			if cls then
@@ -801,8 +798,7 @@ __loaders__["source.emitter"] = function(...)
 		return "{\n" .. table.concat(parts, ",\n") .. "\n}"
 	end
 	local function prepare_source(name, src, cfg)
-		local resolve = cfg.resolve
-		if resolve then
+		if cfg.resolve then
 			local tokens = Lexer.tokenize(src)
 			local reqs = Lexer.find_requires(tokens)
 			local count
@@ -816,7 +812,7 @@ __loaders__["source.emitter"] = function(...)
 			return src
 		end
 		if mode ~= "all" and mode ~= "non_ann" then
-			error("unknown strip value: " .. tostring(mode), 2)
+			error("unknown strip mode: " .. tostring(mode), 2)
 		end
 		return Lexer.strip(src, {
 			keep_annotations = (mode == "non_ann"),
@@ -859,14 +855,13 @@ __loaders__["source.emitter"] = function(...)
 		end
 		local out = {}
 		local timestamp = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or "unknown"
-		out[#out + 1] = string.format("--[[ LuaOne | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
+		out[#out + 1] = string.format("--[[ OneLua | entry: %s | modules: %d | %s ]]", cfg.entry, #modules, timestamp)
 		local ann_lines = Annotations.collect(modules)
 		if #ann_lines > 0 then
 			out[#out + 1] = ""
 			out[#out + 1] = banner("TYPE ANNOTATIONS")
 			out[#out + 1] = "-- Extracted from source modules."
 			out[#out + 1] = "-- Hoisted to top level so lua-language-server can index them."
-			out[#out + 1] = "-- Regenerate by re-running the bundler."
 			out[#out + 1] = "--"
 			for _, line in ipairs(ann_lines) do
 				out[#out + 1] = line
@@ -886,12 +881,12 @@ __loaders__["source.emitter"] = function(...)
 			out[#out + 1] = indent(body, 3)
 			out[#out + 1] = "end\n"
 		end
+		local export_name = cfg.name or cfg.entry:match("[^%.]+$") or "lib"
 		out[#out + 1] = banner("ENTRY")
 		out[#out + 1] = ""
 		out[#out + 1] = string.format("---@module '%s'", cfg.entry)
-		local name = cfg.name or cfg.entry:match("[^%.]+$") or "lib"
-		out[#out + 1] = string.format("local %s = __require__(%q)", name, cfg.entry)
-		out[#out + 1] = string.format("return %s", name)
+		out[#out + 1] = string.format("local %s = __require__(%q)", export_name, cfg.entry)
+		out[#out + 1] = string.format("return %s", export_name)
 		return table.concat(out, "\n")
 	end
 	return Emitter
@@ -899,9 +894,9 @@ end
 
 -- source.cli <- ./source/cli.lua
 __loaders__["source.cli"] = function(...)
-	local DEFAULT_CONFIG = "bundler.config.lua"
-	local FALLBACK_CONFIG = "_bundler.config.lua"
 	local CLI = {}
+	local DEFAULT_CONFIG = "bundler.config.lua"
+	local FALLBACK_CONFIG = "bundlerConfig.lua"
 	local HELP = table.concat({
 		"OneLua - bundle a Lua project into a single file",
 		"",
@@ -931,49 +926,12 @@ __loaders__["source.cli"] = function(...)
 		"  lua bundler.lua --config my_project.config.lua --debug --verify",
 		"  lua bundler.lua --config release.config.lua --strip all --out dist/lib.lua",
 	}, "\n")
-	local function parse_args(args)
-		local flags = {}
-		local i = 1
-		while i <= #args do
-			local a = args[i]
-			if a == "--help" or a == "-h" then
-				flags.help = true
-			elseif a == "--debug" then
-				flags.debug = true
-			elseif a == "--verify" then
-				flags.verify = true
-			elseif a == "--resolve" then
-				flags.resolve = true
-			elseif a == "--compact" then
-				flags.compact = true
-			elseif a == "--entry" then
-				i = i + 1
-				flags.entry = args[i]
-			elseif a == "--src" then
-				i = i + 1
-				flags.src = args[i]
-			elseif a == "--out" then
-				i = i + 1
-				flags.out = args[i]
-			elseif a == "--name" then
-				i = i + 1
-				flags.name = args[i]
-			elseif a == "--strip" then
-				i = i + 1
-				local mode = args[i]
-				if mode ~= "all" and mode ~= "non_ann" then
-					return nil, "--strip must be 'all' or 'non_ann'"
-				end
-				flags.strip = mode
-			elseif a == "--config" then
-				i = i + 1
-				flags.config_path = args[i]
-			else
-				return nil, "unknown option: " .. tostring(a)
-			end
-			i = i + 1
+	local function require_arg(args, i, flag)
+		local v = args[i + 1]
+		if not v or v:sub(1, 2) == "--" then
+			error("option " .. flag .. " requires an argument", 0)
 		end
-		return flags
+		return v
 	end
 	local function merge(base, overrides)
 		local result = {}
@@ -1001,7 +959,7 @@ __loaders__["source.cli"] = function(...)
 		end
 		return cfg
 	end
-	local function detect_config_path(preferred)
+	local function detect_config(preferred)
 		if preferred then
 			local cfg = load_config(preferred)
 			if not cfg then
@@ -1009,29 +967,65 @@ __loaders__["source.cli"] = function(...)
 			end
 			return preferred, cfg
 		end
-		local candidates = { DEFAULT_CONFIG, FALLBACK_CONFIG }
-		for _, path in ipairs(candidates) do
+		for _, path in ipairs({ DEFAULT_CONFIG, FALLBACK_CONFIG }) do
 			local cfg = load_config(path)
 			if cfg then
 				return path, cfg
 			end
 		end
+		return nil, nil
 	end
 	function CLI.parse(args)
-		local flags, parse_msg = parse_args(args)
-		if not flags then
-			error(parse_msg .. "\n  run with --help for usage", 0)
+		local flags = {}
+		local i = 1
+		while i <= #args do
+			local a = args[i]
+			if a == "--help" or a == "-h" then
+				flags.help = true
+			elseif a == "--debug" then
+				flags.debug = true
+			elseif a == "--verify" then
+				flags.verify = true
+			elseif a == "--resolve" then
+				flags.resolve = true
+			elseif a == "--compact" then
+				flags.compact = true
+			elseif a == "--entry" then
+				flags.entry = require_arg(args, i, a)
+				i = i + 1
+			elseif a == "--src" then
+				flags.src = require_arg(args, i, a)
+				i = i + 1
+			elseif a == "--out" then
+				flags.out = require_arg(args, i, a)
+				i = i + 1
+			elseif a == "--name" then
+				flags.name = require_arg(args, i, a)
+				i = i + 1
+			elseif a == "--config" then
+				flags.config_path = require_arg(args, i, a)
+				i = i + 1
+			elseif a == "--strip" then
+				local mode = require_arg(args, i, a)
+				i = i + 1
+				if mode ~= "all" and mode ~= "non_ann" then
+					error("--strip must be 'all' or 'non_ann'", 0)
+				end
+				flags.strip = mode
+			else
+				error("unknown option: " .. tostring(a) .. "\n  run with --help for usage", 0)
+			end
+			i = i + 1
 		end
 		if flags.help then
 			print(HELP)
 			return nil
 		end
-		local config_path, file_cfg = detect_config_path(flags.config_path)
+		local config_path, file_cfg = detect_config(flags.config_path)
 		if config_path then
 			print("[bundler] using config: " .. config_path)
 		end
-		file_cfg = file_cfg or {}
-		local cfg = merge(file_cfg, {
+		local cfg = merge(file_cfg or {}, {
 			entry = flags.entry,
 			src = flags.src,
 			out = flags.out,
@@ -1059,7 +1053,7 @@ end
 
 -- bundler <- ./bundler.lua
 __loaders__["bundler"] = function(...)
-	local SELF_DIR = ((debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./")
+	local SELF_DIR = (debug.getinfo(1, "S").source:sub(2)):match("^(.*[/\\])") or "./"
 	package.path = SELF_DIR .. "?.lua;" .. SELF_DIR .. "?/init.lua;" .. package.path
 	local Discover = require("source.discover")
 	local Emitter = require("source.emitter")
@@ -1071,17 +1065,17 @@ __loaders__["bundler"] = function(...)
 		local dir = out:match("^(.*[/\\])") or "./"
 		local name = out:match("([^/\\]+)%.lua$")
 		if not name then
-			print("[bundler] verify: skipped (cannot extract module name)")
+			print("[bundler] verify: skipped (cannot extract module name from path)")
 			return
 		end
 		local prev_path = package.path
 		package.path = dir .. "?.lua;" .. prev_path
 		package.loaded[name] = nil
-		local old_arg = _G.arg
+		local saved_arg = _G.arg
 		_G.arg = nil
 		print("[bundler] verifying...")
 		local ok, result = pcall(require, name)
-		_G.arg = old_arg
+		_G.arg = saved_arg
 		package.path = prev_path
 		package.loaded[name] = nil
 		if not ok then
@@ -1134,7 +1128,7 @@ __loaders__["bundler"] = function(...)
 		end
 	end
 	if arg and arg[0] == debug.getinfo(1, "S").source:sub(2) then
-		Bundler.run_cli(arg or {})
+		Bundler.run_cli(arg)
 	end
 	return Bundler
 end
