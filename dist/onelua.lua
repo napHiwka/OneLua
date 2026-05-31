@@ -1,4 +1,4 @@
---[[ OneLua | entry: bundler | modules: 7 | 2026-05-30T20:53:00Z ]]
+--[[ OneLua | entry: bundler | modules: 7 | 2026-05-31T10:54:18Z ]]
 
 --------------------------------------------------------------------------
 -- TYPE ANNOTATIONS
@@ -347,11 +347,11 @@ __loaders__["source.lexer"] = function(...)
 						end
 						local rewrite_as = nil
 						if #arg_seq == 3 then
-							local a, b, c = arg_seq[1], arg_seq[2], arg_seq[3]
+							local a, b, c2 = arg_seq[1], arg_seq[2], arg_seq[3]
 							if b.type == T.CONCAT then
-								if a.type == T.IDENT and c.type == T.STRING then
-									rewrite_as = c.value
-								elseif a.type == T.STRING and c.type == T.IDENT then
+								if a.type == T.IDENT and c2.type == T.STRING then
+									rewrite_as = c2.value
+								elseif a.type == T.STRING and c2.type == T.IDENT then
 									rewrite_as = a.value
 								end
 							end
@@ -394,6 +394,7 @@ __loaders__["source.lexer"] = function(...)
 		end
 		return table.concat(lines)
 	end
+	Lexer.compact_lines = compact_lines
 	function Lexer.strip(src, opts)
 		opts = opts or {}
 		local keep_ann = opts.keep_annotations or false
@@ -401,14 +402,24 @@ __loaders__["source.lexer"] = function(...)
 		local compact = opts.compact or false
 		local out = {}
 		local i, n = 1, #src
+		local line_has_code = false
+		local line_start_idx = 1
 		local function ch(off)
 			return char_at(src, i, n, off)
 		end
-		local function emit(s)
-			out[#out + 1] = s
-		end
 		local function adv(k)
 			i = i + (k or 1)
+		end
+		local function emit(s)
+			out[#out + 1] = s
+			if s:match("[^ \t\n]") then
+				line_has_code = true
+			end
+		end
+		local function emit_newline()
+			out[#out + 1] = "\n"
+			line_has_code = false
+			line_start_idx = #out + 1
 		end
 		local function copy_short_string()
 			local q = ch()
@@ -425,7 +436,10 @@ __loaders__["source.lexer"] = function(...)
 		end
 		while i <= n do
 			local c = ch()
-			if c == "-" and ch(1) == "-" then
+			if c == "\n" then
+				emit_newline()
+				adv()
+			elseif c == "-" and ch(1) == "-" then
 				local is_block = false
 				if ch(2) == "[" then
 					local cs, _, next_pos, closed = long_bracket_span(src, i + 3, n)
@@ -437,8 +451,8 @@ __loaders__["source.lexer"] = function(...)
 						for _ in src:sub(i, next_pos - 1):gmatch("\n") do
 							nl_count = nl_count + 1
 						end
-						if nl_count > 0 then
-							emit(string.rep("\n", nl_count))
+						for _ = 1, nl_count do
+							emit_newline()
 						end
 						i = next_pos
 						is_block = true
@@ -450,11 +464,19 @@ __loaders__["source.lexer"] = function(...)
 						i = i + 1
 					end
 					local comment = src:sub(ls, i - 1)
-					if
-						(keep_ann and comment:match("^%-%-%-%s*@"))
+					local keep = (keep_ann and comment:match("^%-%-%-%s*@"))
 						or (keep_module and comment:match("^%-%-%-%s*@module"))
-					then
+					if keep then
 						emit(comment)
+					else
+						if not line_has_code then
+							for j = line_start_idx, #out do
+								out[j] = nil
+							end
+							if i <= n and src:sub(i, i) == "\n" then
+								i = i + 1
+							end
+						end
 					end
 				end
 			elseif c == "[" and (ch(1) == "[" or ch(1) == "=") then
@@ -463,7 +485,11 @@ __loaders__["source.lexer"] = function(...)
 					if not closed then
 						print("[lexer] warning: unclosed long string")
 					end
-					emit(src:sub(i, next_pos - 1))
+					local s = src:sub(i, next_pos - 1)
+					emit(s)
+					if s:sub(-1) == "\n" then
+						line_has_code = false
+					end
 					i = next_pos
 				else
 					emit(c)
@@ -808,17 +834,20 @@ __loaders__["source.emitter"] = function(...)
 			end
 		end
 		local mode = cfg.strip
-		if not mode or mode == false then
-			return src
+		if mode and mode ~= false then
+			if mode ~= "all" and mode ~= "non_ann" then
+				error("unknown strip mode: " .. tostring(mode), 2)
+			end
+			return Lexer.strip(src, {
+				keep_annotations = (mode == "non_ann"),
+				keep_module = true,
+				compact = cfg.compact,
+			})
 		end
-		if mode ~= "all" and mode ~= "non_ann" then
-			error("unknown strip mode: " .. tostring(mode), 2)
+		if cfg.compact then
+			return Lexer.compact_lines(src)
 		end
-		return Lexer.strip(src, {
-			keep_annotations = (mode == "non_ann"),
-			keep_module = true,
-			compact = cfg.compact,
-		})
+		return src
 	end
 	local RUNTIME = [[
    local __modules__ = {}
