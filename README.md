@@ -1,21 +1,16 @@
 # OneLua
 
-OneLua bundles a Lua project into a single distributable `.lua` file.
+OneLua bundles a Lua project into a single distributable `.lua` file. It can be used as a CLI tool or embedded as a library. Mostly source code requires no manual changes to be bundled.
 
 ## Features
 
-- Follows local static `require()` dependencies automatically
-  - For dynamic require() calls, use `extra` and `aliases` in config
-- Optionally, can resolve dynamic `require()` statements from `utils = require(VAR .. "utils")` -> `utils = require("utils")`. If you include an extra file `utils` -> working code without manual editing.
-- Hoists annotations to the top of the bundle for better language server support
-- Optionally verifies the generated bundle by loading it after writing
-- Produces compact code (not minified)
-- Strips comments from the bundled output
-- Supports aliases and extra files
-- Compatible with Lua 5.1+
-
-> A static require is when the path to the module is a constant string known at analysis time.
-> A dynamic require is when the path to the module is evaluated at runtime, which prevents static analysis tools from resolving it.
+- Follows `require()` dependencies automatically, depth-first.
+- Hoists `---@` annotations to the top of the bundle for language server support.
+- Aliases let you remap module names at runtime (useful for dynamic requires).
+- Optionally rewrites simple dynamic `require()` calls to static ones.
+- Optionally strips comments and produces compact output.
+- Optionally verifies the bundle by loading it immediately after writing.
+- Compatible with Lua 5.1 - 5.5, LuaJIT.
 
 ## CLI
 
@@ -23,39 +18,72 @@ OneLua bundles a Lua project into a single distributable `.lua` file.
 lua bundler.lua --entry source/main.lua --src ./ --out dist/bundle.lua
 ```
 
-- `--entry <module>` entry module or file path
-- `--src <dir>` source directory (default `./`)
-- `--out <file>` output file (default `./bundle.lua`)
-- `--name <id>` name of the exported variable
-- `--config <file>` path to the config file
-- `--strip all|non_ann` strip comments from the output
-- `--compact` enable compact output
-- `--resolve` resolve possible dynamic dependencies
-- `--debug` print dependency resolution logs
-- `--verify` require the generated bundle after writing to verify it
-- `--help` show help
+Only `--entry` is required; everything else is optional.
 
-## Optional Config
+`--entry <module>` entry module name or file path
+`--src <dir>` source root (default: `./`)
+`--out <file>` output path (default: `./bundle.lua`)
+`--name <id>` exported variable name (default: entry basename)
+`--config <file>` config file path
+`--strip <mode>` strip comments (`all` or `non_ann` modes)
+`--compact` collapse blank lines in output
+`--resolve` rewrite resolvable dynamic requires
+`--debug` print verbose dependency resolution logs
+`--verify` load the bundle after writing to confirm it runs
+`--help` show help
 
-The bundler automatically detects this file if it is present in the working directory with name `bundler.config.lua` or `bundlerConfig.lua`.
+## Config File
+
+The bundler auto-detects `bundler.config.lua` or `bundlerConfig.lua` in the working directory. CLI flags override config values. A configuration file with detailed comments is available [here](bundler.config.lua). There is also a [bare](bare.config.lua) conf file to make it easier to customize if you are already familiar with the structure.
+
+## Concepts
+
+### Static vs dynamic requires
+
+A *static require* has a string literal argument known at analysis time:
 
 ```lua
-return {
-	entry = "main.lua",
-	src = "src/",
-	out = "dist/bundle.lua",
-	name = "MyLib",
-	extra = {
-		"plugins.backend",
-	},
-	skip_extra_files_requires = false,
-	aliases = {
-		["json"] = "vendor.json",
-	},
-	strip = "non_ann",
-	resolve = false,
-	compact = true,
-	debug = true,
-	verify = true,
+local json = require("vendor.json")
+```
+
+A *dynamic require* is computed at runtime and cannot be resolved statically:
+
+```lua
+local mod = require(prefix .. "utils")
+```
+
+Dynamic requires will produce a `WARN:` line during bundling. To handle them, use `extra` to force-include the module and `aliases` to remap the name (see below), or use `--resolve` if the pattern is simple enough to rewrite automatically.
+
+### Resolve
+
+When enabled, the bundler rewrites simple dynamic require patterns to static ones before emitting. It handles two forms:
+
+```lua
+-- Before
+local mod = require(prefix .. "utils")
+local mod = require("mylib." .. name)
+
+-- After (example, depending on what the bundler can infer)
+local mod = require("utils")
+local mod = require("mylib.name")
+```
+
+Only patterns where the dynamic part is a single identifier concatenated with a string literal are rewritten. Everything else still produces a `WARN:` and requires manual aliases.
+
+### Extra
+
+Lists module names to include unconditionally, even if they are not reachable from the entry module via static requires. Useful for modules that are only loaded dynamically. By default, requires found inside extra files are followed normally. Set `skip_extra_files_requires = true` to include the extra file itself but not its dependencies.
+
+### Aliases
+
+Aliases remap a module name inside the bundle at runtime. The bundle's `require()` wrapper consults the alias table before looking up a loader, so `require("old.name")` transparently resolves to whatever `"new.name"` was bundled as.
+
+```lua
+aliases = {
+    ["json"] = "vendor.json", -- require("json") -> vendor.json
+    [".namespace"] = "src.namespace", -- require(".namespace") -> src.namespace
+    ["namespace"] = "src.namespace", -- require("namespace") -> src.namespace
 }
 ```
+
+The primary use case is dynamic requires: if a module calls `require(base .. "utils")`, the runtime will produce a string like `"utils"` or `".utils"` depending on `base`. Adding aliases for both spellings pointing to the bundled module name (`"src.utils"`) means the call resolves correctly without modifying the source.
