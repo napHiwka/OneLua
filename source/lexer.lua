@@ -445,11 +445,11 @@ function Lexer.find_requires(tokens)
 					-- possible rewriting.
 					local rewrite_as = nil
 					if #arg_seq == 3 then
-						local a, b, c = arg_seq[1], arg_seq[2], arg_seq[3]
+						local a, b, c2 = arg_seq[1], arg_seq[2], arg_seq[3]
 						if b.type == T.CONCAT then
-							if a.type == T.IDENT and c.type == T.STRING then
-								rewrite_as = c.value -- require(IDENT .. "str")
-							elseif a.type == T.STRING and c.type == T.IDENT then
+							if a.type == T.IDENT and c2.type == T.STRING then
+								rewrite_as = c2.value -- require(IDENT .. "str")
+							elseif a.type == T.STRING and c2.type == T.IDENT then
 								rewrite_as = a.value -- require("str" .. IDENT)
 							end
 						end
@@ -503,24 +503,37 @@ local function compact_lines(src)
 	end
 	return table.concat(lines)
 end
+Lexer.compact_lines = compact_lines
 
 function Lexer.strip(src, opts)
 	opts = opts or {}
 	local keep_ann = opts.keep_annotations or false
 	local keep_module = opts.keep_module or false
 	local compact = opts.compact or false
-
 	local out = {}
 	local i, n = 1, #src
+	local line_has_code = false -- true once non-whitespace content is emitted on this line
+	local line_start_idx = 1 -- out[] index at start of current line; used to roll back
 
 	local function ch(off)
 		return char_at(src, i, n, off)
 	end
-	local function emit(s)
-		out[#out + 1] = s
-	end
+
 	local function adv(k)
 		i = i + (k or 1)
+	end
+
+	local function emit(s)
+		out[#out + 1] = s
+		if s:match("[^ \t\n]") then
+			line_has_code = true
+		end
+	end
+
+	local function emit_newline()
+		out[#out + 1] = "\n"
+		line_has_code = false
+		line_start_idx = #out + 1
 	end
 
 	-- Emit a short-quoted string verbatim, including surrounding quotes.
@@ -541,8 +554,12 @@ function Lexer.strip(src, opts)
 	while i <= n do
 		local c = ch()
 
+		if c == "\n" then
+			emit_newline()
+			adv()
+
 		-- Comments
-		if c == "-" and ch(1) == "-" then
+		elseif c == "-" and ch(1) == "-" then
 			-- Check for a block comment.  Offset +3 positions past "--["
 			-- without mutating i.
 			local is_block = false
@@ -559,10 +576,9 @@ function Lexer.strip(src, opts)
 					for _ in src:sub(i, next_pos - 1):gmatch("\n") do
 						nl_count = nl_count + 1
 					end
-					if nl_count > 0 then
-						emit(string.rep("\n", nl_count))
+					for _ = 1, nl_count do
+						emit_newline()
 					end
-
 					i = next_pos
 					is_block = true
 				end
@@ -579,13 +595,22 @@ function Lexer.strip(src, opts)
 				end
 				local comment = src:sub(ls, i - 1)
 
-				if
-					(keep_ann and comment:match("^%-%-%-%s*@"))
+				local keep = (keep_ann and comment:match("^%-%-%-%s*@"))
 					or (keep_module and comment:match("^%-%-%-%s*@module"))
-				then
+				if keep then
 					emit(comment)
+				else
+					if not line_has_code then
+						-- Roll back any leading whitespace already emitted for this
+						-- line (e.g. tabs before "--"), then skip the trailing \n.
+						for j = line_start_idx, #out do
+							out[j] = nil
+						end
+						if i <= n and src:sub(i, i) == "\n" then
+							i = i + 1
+						end
+					end
 				end
-				-- Otherwise the comment is silently dropped.
 			end
 
 		-- Long strings
@@ -595,9 +620,14 @@ function Lexer.strip(src, opts)
 				if not closed then
 					print("[lexer] warning: unclosed long string")
 				end
-				-- Long strings are content, not comments; copy verbatim
-				-- including the surrounding bracket delimiters.
-				emit(src:sub(i, next_pos - 1))
+				-- Emit the long string verbatim; track newlines within it.
+				local s = src:sub(i, next_pos - 1)
+				emit(s)
+				-- Reset line_has_code based on whether the last char before
+				-- next_pos was a newline.
+				if s:sub(-1) == "\n" then
+					line_has_code = false
+				end
 				i = next_pos
 			else
 				-- Not a valid opener; emit "[" literally.

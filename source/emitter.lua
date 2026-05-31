@@ -48,18 +48,22 @@ local function prepare_source(name, src, cfg)
 	end
 
 	local mode = cfg.strip
-	if not mode or mode == false then
-		return src
-	end
-	if mode ~= "all" and mode ~= "non_ann" then
-		error("unknown strip mode: " .. tostring(mode), 2)
+	if mode and mode ~= false then
+		if mode ~= "all" and mode ~= "non_ann" then
+			error("unknown strip mode: " .. tostring(mode), 2)
+		end
+
+		return Lexer.strip(src, {
+			keep_annotations = (mode == "non_ann"),
+			keep_module = true,
+			compact = cfg.compact,
+		})
 	end
 
-	return Lexer.strip(src, {
-		keep_annotations = (mode == "non_ann"),
-		keep_module = true,
-		compact = cfg.compact,
-	})
+	if cfg.compact then
+		return Lexer.compact_lines(src)
+	end
+	return src
 end
 
 local RUNTIME = [[
