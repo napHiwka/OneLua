@@ -20,17 +20,17 @@ lua bundler.lua --entry source/main.lua --src ./ --out dist/bundle.lua
 
 Only `--entry` is required; everything else is optional.
 
-`--entry <module>` entry module name or file path
-`--src <dir>` source root (default: `./`)
-`--out <file>` output path (default: `./bundle.lua`)
-`--name <id>` exported variable name (default: entry basename)
-`--config <file>` config file path
-`--strip <mode>` strip comments (`all` or `non_ann` modes)
-`--compact` collapse blank lines in output
-`--resolve` rewrite resolvable dynamic requires
-`--debug` print verbose dependency resolution logs
-`--verify` load the bundle after writing to confirm it runs
-`--help` show help
+- `--entry <module>` entry module name or file path
+- `--src <dir>` source root (default: `./`)
+- `--out <file>` output path (default: `./bundle.lua`)
+- `--name <id>` exported variable name (default: entry basename)
+- `--config <file>` config file path
+- `--strip <mode>` strip comments (`all` or `non_ann` modes)
+- `--compact` collapse blank lines in output
+- `--resolve` rewrite resolvable dynamic requires
+- `--debug` print verbose dependency resolution logs
+- `--verify` load the bundle after writing to confirm it runs
+- `--help` show help
 
 ## Config File
 
